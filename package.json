@@ -1,1 +1,31 @@
-{"bin":{"mcpguard":"dist/cli.js"},"description":"Open-source security and cost control plane for MCP servers: scan, harden, and govern the tools your AI agents use.","devDependencies":{"typescript":"^5.6.3","vitest":"^3.2.4"},"engines":{"node":">=20"},"files":["dist"],"license":"MIT","name":"mcp-guard","repository":{"type":"git","url":"https://github.com/dhruv1220/mcp-guard.git"},"scripts":{"build":"tsc","scan":"node dist/cli.js scan","test":"vitest run","typecheck":"tsc --noEmit"},"type":"module","version":"0.1.0"}
+{
+  "bin": {
+    "mcpguard": "dist/cli.js"
+  },
+  "description": "Open-source security and cost control plane for MCP servers: scan, harden, and govern the tools your AI agents use.",
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "name": "mcp-guard",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dhruv1220/mcp-guard.git"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "scan": "node dist/cli.js scan",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
