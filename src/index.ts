@@ -11,3 +11,21 @@ export type {
 export { loadConfig, ConfigError } from "./config.js";
 export { ALL_CHECKS, breachesThreshold, runChecks } from "./scanner/engine.js";
 export { formatJson, formatTable } from "./report.js";
+export {
+  decide,
+  loadPolicy,
+  PolicyError,
+} from "./gateway/policy.js";
+export type {
+  ArgConstraint,
+  Decision,
+  GatewayPolicy,
+  PolicyAction,
+  ServerPolicy,
+  ToolPolicyEntry,
+  ToolRule,
+} from "./gateway/policy.js";
+export { createAuditor, redactArgsForLog } from "./gateway/audit.js";
+export type { AuditRecord, Auditor } from "./gateway/audit.js";
+export { runProxy } from "./gateway/proxy.js";
+export type { ProxyOptions } from "./gateway/proxy.js";
