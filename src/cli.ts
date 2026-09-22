@@ -12,6 +12,7 @@ import { breachesThreshold, runChecks } from "./scanner/engine.js";
 import { formatJson, formatTable } from "./report.js";
 import { runProxy } from "./gateway/proxy.js";
 import { probeServer, ProbeError } from "./probe.js";
+import { generatePolicy } from "./policygen.js";
 import type { Severity } from "./scanner/types.js";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -35,11 +36,13 @@ function usage(): string {
     "  mcpguard scan --config <path> [--format table|json] [--fail-on <severity>] [--no-network]",
     "  mcpguard gateway --policy <path> --server <name> -- <command> [args...]",
     "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
+    "  mcpguard init-policy --server <name> [--default allow|deny] [--timeout <ms>] -- <command> [args...]",
     "",
     "Commands:",
     "  scan                 statically audit an MCP client config",
     "  gateway              transparent policy-enforcing proxy for one MCP server",
     "  probe                enumerate a server's real tool surface (initialize + tools/list)",
+    "  init-policy          print a starter deny-by-default policy from a live probe",
     "",
     "Options:",
     "  --config <path>      MCP client config JSON (with an \"mcpServers\" block)",
@@ -63,6 +66,7 @@ interface Args {
   policy?: string;
   server?: string;
   timeoutMs?: number;
+  defaultAction?: "allow" | "deny";
   commandArgs: string[];
 }
 
@@ -83,6 +87,10 @@ function parseArgs(argv: string[]): Args {
       const t = Number(rest.shift());
       if (!Number.isFinite(t) || t <= 0) throw new ConfigError("--timeout must be a positive number");
       args.timeoutMs = t;
+    } else if (a === "--default") {
+      const d = rest.shift();
+      if (d !== "allow" && d !== "deny") throw new ConfigError("--default must be allow or deny");
+      args.defaultAction = d;
     } else if (a === "--format") {
       const f = rest.shift();
       if (f !== "table" && f !== "json") throw new ConfigError(`--format must be table or json`);
@@ -111,8 +119,39 @@ async function main(): Promise<void> {
     console.log(usage());
     process.exit(args.command === "help" ? 0 : 2);
   }
-  if (args.command === "probe") {
+  if (args.command === "init-policy") {
+    if (!args.server) {
+      console.error("missing required option: --server <name>\n");
+      console.error(usage());
+      process.exit(2);
+    }
     if (args.commandArgs.length === 0) {
+      console.error("missing server command after --\n");
+      console.error(usage());
+      process.exit(2);
+    }
+    try {
+      const probed = await probeServer({
+        command: args.commandArgs[0]!,
+        commandArgs: args.commandArgs.slice(1),
+        timeoutMs: args.timeoutMs,
+      });
+      const policy = generatePolicy(
+        args.server,
+        probed.tools,
+        args.defaultAction ?? "deny"
+      );
+      console.log(JSON.stringify(policy, null, 2));
+    } catch (err) {
+      if (err instanceof ProbeError) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    return;
+  }
+  if (args.command === "probe") {    if (args.commandArgs.length === 0) {
       console.error("missing server command after --\n");
       console.error(usage());
       process.exit(2);

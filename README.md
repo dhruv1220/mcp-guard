@@ -83,6 +83,13 @@ Spawns the server, runs `initialize` + `tools/list`, and prints the real tool
 surface as JSON — know what you're about to write a policy for. Fails fast on
 spawn errors; `--timeout <ms>` bounds the whole probe (default 15000).
 
+Turn a probe straight into a starter policy (deny-by-default, every discovered
+tool set to `approval` so nothing runs until you allowlist it):
+
+```bash
+mcpguard init-policy --server filesystem -- npx -y @modelcontextprotocol/server-filesystem /safe > policy.json
+```
+
 ## Checks (v0.1)
 
 | Check ID | Severity | What it flags |

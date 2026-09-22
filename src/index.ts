@@ -33,5 +33,6 @@ export { probeServer, ProbeError } from "./probe.js";
 export type { ProbeOptions, ProbeResult, ProbedTool } from "./probe.js";
 export { extractResultTexts, screenText } from "./gateway/screen.js";
 export type { InjectionPattern } from "./gateway/screen.js";
+export { generatePolicy } from "./policygen.js";
 export { runProxy } from "./gateway/proxy.js";
 export type { ProxyOptions } from "./gateway/proxy.js";
