@@ -133,6 +133,50 @@ describe("gateway", () => {
     expect(records.every((r) => typeof r.ts === "string")).toBe(true);
   }, 25000);
 
+  it("enforces session budgets: trips the circuit after maxCalls", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-budget-"));
+    const callsLog = join(dir, "calls.log");
+    const auditLog = join(dir, "audit.jsonl");
+    const policyPath = join(dir, "policy.json");
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        defaultAction: "deny",
+        auditLog,
+        budgets: { maxCalls: 2 },
+        servers: {
+          fake: { tools: { read_file: "allow" } },
+        },
+      })
+    );
+
+    const { proc, send } = launchGateway(policyPath, callsLog);
+    const call = () =>
+      send("tools/call", { name: "read_file", arguments: { path: "/safe/a.txt" } });
+
+    expect((await call()).result.content[0].text).toBe("FILE_CONTENTS");
+    expect((await call()).result.content[0].text).toBe("FILE_CONTENTS");
+    const blocked = await call();
+    expect(blocked.error.code).toBe(-32602);
+    expect(blocked.error.message).toContain("budget exceeded");
+
+    const seen = readFileSync(callsLog, "utf-8").trim().split("\n");
+    expect(seen).toEqual(["read_file", "read_file"]);
+
+    proc.stdin!.end();
+    await new Promise<void>((resolve) => proc.on("exit", () => resolve()));
+
+    const records = readFileSync(auditLog, "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const budgetDenies = records.filter(
+      (r) => r.decision === "deny" && r.reason.includes("budget exceeded")
+    );
+    expect(budgetDenies).toHaveLength(1);
+  }, 25000);
+
   it("exits 2 when required gateway options are missing", () => {
     const run = (args: string[]) => {
       try {

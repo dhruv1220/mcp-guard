@@ -52,6 +52,18 @@ Deny always wins; unknown tools fall back to the server's `defaultAction`, then 
 root `defaultAction`. `"approval"` denies in non-interactive use. Secret-looking
 argument values are redacted in the audit log automatically.
 
+### Session budgets
+
+Add a `budgets` block to cap what one session may consume. When a cap trips, the
+circuit breaks and every further `tools/call` is denied:
+
+```json
+{ "budgets": { "maxCalls": 200, "maxResultBytes": 1048576, "maxSessionMs": 3600000 } }
+```
+
+Budgets measure what the proxy can observe honestly — forwarded call count, total
+tool-result bytes, wall time. Token/cost estimation is out of scope for v1.
+
 ## Checks (v0.1)
 
 | Check ID | Severity | What it flags |

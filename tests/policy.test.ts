@@ -55,6 +55,19 @@ describe("loadPolicy", () => {
       loadPolicy(tmpPolicy(JSON.stringify({ ...base, defaultAction: "maybe" })))
     ).toThrow(PolicyError);
   });
+
+  it("accepts valid budgets and rejects bad ones", () => {
+    const withBudgets = tmpPolicy(
+      JSON.stringify({ ...base, budgets: { maxCalls: 10, maxResultBytes: 1024 } })
+    );
+    expect(loadPolicy(withBudgets).budgets).toEqual({ maxCalls: 10, maxResultBytes: 1024 });
+    expect(() =>
+      loadPolicy(tmpPolicy(JSON.stringify({ ...base, budgets: { maxCalls: -1 } })))
+    ).toThrow(PolicyError);
+    expect(() =>
+      loadPolicy(tmpPolicy(JSON.stringify({ ...base, budgets: { maxTokens: 5 } })))
+    ).toThrow(PolicyError);
+  });
 });
 
 describe("decide", () => {
