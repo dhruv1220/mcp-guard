@@ -1,0 +1,1 @@
+{"mcpServers":{"internal-api":{"headers":{"Authorization":"Bearer ${INTERNAL_MCP_TOKEN}"},"url":"https://mcp.internal.example.com/mcp"},"local-docs":{"args":["-m","docs_server"],"command":"python","env":{"DOCS_DIR":"${DOCS_DIR}"}}}}

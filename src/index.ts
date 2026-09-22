@@ -1,4 +1,4 @@
-// mcp-guard public API (scanner). CLI/report ship next.
+// mcp-guard public API. Scanner ships in v0.1; gateway lands next.
 export type {
   Check,
   CheckContext,
@@ -10,3 +10,4 @@ export type {
 } from "./scanner/types.js";
 export { loadConfig, ConfigError } from "./config.js";
 export { ALL_CHECKS, breachesThreshold, runChecks } from "./scanner/engine.js";
+export { formatJson, formatTable } from "./report.js";
