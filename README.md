@@ -1,1 +1,43 @@
 # mcp-guard
+
+**The open-source security and cost control plane for MCP servers.**
+
+AI agents now consume dozens of MCP servers, skills, and plugins — most of them installed with a copy-pasted config and never reviewed. Industry scans keep finding the same story: a large share of public MCP servers ship with no authentication, plaintext transport, hardcoded secrets, and auto-executed packages straight from the registry. mcp-guard exists to make that visible and fixable.
+
+## What it does
+
+- **`mcpguard scan`** — statically audit an MCP client config (`mcpServers` JSON) for authentication gaps, insecure transport, hardcoded secrets, risky commands, and npm supply-chain risk. Findings are severity-ranked, secrets are redacted in output, and `--fail-on` gates CI.
+- **Roadmap** — a transparent enforcement gateway (per-tool allowlists, token/cost budgets with circuit breakers, prompt-injection screening of tool output, audit logging), live tool-surface probing, and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
+
+## Quickstart
+
+```bash
+npm install -g mcp-guard
+mcpguard scan --config ~/.claude.json
+# or point at any config file with an "mcpServers" block
+mcpguard scan --config ./mcp.json --format json --fail-on high
+```
+
+## Checks (v0.1)
+
+| Check ID | Severity | What it flags |
+|---|---|---|
+| `no-auth` | high | Remote (HTTP/SSE) server with no `Authorization` header or token |
+| `plaintext-http` | high | Remote URL over `http://` instead of `https://` |
+| `wildcard-bind` | medium | Server URL bound to `0.0.0.0` (exposed to the local network) |
+| `hardcoded-secret` | high | API keys / tokens committed in `env` or headers (redacted in output) |
+| `risky-stdio-command` | critical–medium | `curl … \| sh`, `sudo`, encoded PowerShell, unpinned `npx -y` auto-install |
+| `npm-supply-chain` | medium | `npx`/`uvx` package missing from npm or published < 90 days ago |
+
+## Development
+
+```bash
+npm install
+npm run typecheck && npm run build && npm test
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Zero runtime dependencies by design.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
