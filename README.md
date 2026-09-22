@@ -7,7 +7,8 @@ AI agents now consume dozens of MCP servers, skills, and plugins — most of the
 ## What it does
 
 - **`mcpguard scan`** — statically audit an MCP client config (`mcpServers` JSON) for authentication gaps, insecure transport, hardcoded secrets, risky commands, and npm supply-chain risk. Findings are severity-ranked, secrets are redacted in output, and `--fail-on` gates CI.
-- **Roadmap** — a transparent enforcement gateway (per-tool allowlists, token/cost budgets with circuit breakers, prompt-injection screening of tool output, audit logging), live tool-surface probing, and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
+- **`mcpguard gateway`** — a transparent enforcement proxy for one MCP server: every `tools/call` is checked against a JSON policy (per-tool allow/deny/approval, argument patterns, enums, max lengths) before it reaches the server. Denied calls get a JSON-RPC error and are never forwarded; every decision lands in a JSONL audit log with redacted arguments, latency, and result size. Fail-closed: a crashed server ends the session.
+- **Roadmap** — token/cost budgets with circuit breakers, prompt-injection screening of tool output, live tool-surface probing, and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
 
 ## Quickstart
 
@@ -17,6 +18,39 @@ mcpguard scan --config ~/.claude.json
 # or point at any config file with an "mcpServers" block
 mcpguard scan --config ./mcp.json --format json --fail-on high
 ```
+
+## Gateway (v0.2)
+
+Wrap any stdio MCP server with a policy:
+
+```bash
+mcpguard gateway --policy ./policy.json --server filesystem -- npx -y @modelcontextprotocol/server-filesystem /safe
+```
+
+`examples/policy.json`:
+
+```json
+{
+  "version": 1,
+  "defaultAction": "deny",
+  "auditLog": "./mcpguard-audit.jsonl",
+  "logArgs": true,
+  "servers": {
+    "filesystem": {
+      "tools": {
+        "read_file": { "action": "allow", "args": { "path": { "pattern": "^/safe/" } } },
+        "delete_file": "deny"
+      }
+    }
+  }
+}
+```
+
+Rules: a tool entry is `"allow" | "deny" | "approval"` or `{ action, args, redactArgs }`.
+`args` constrains each named argument (`pattern`, `enum`, `maxLength`, `required`).
+Deny always wins; unknown tools fall back to the server's `defaultAction`, then the
+root `defaultAction`. `"approval"` denies in non-interactive use. Secret-looking
+argument values are redacted in the audit log automatically.
 
 ## Checks (v0.1)
 

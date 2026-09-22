@@ -1,0 +1,1 @@
+{"auditLog":"./mcpguard-audit.jsonl","defaultAction":"deny","logArgs":true,"servers":{"filesystem":{"defaultAction":"deny","tools":{"delete_file":"deny","read_file":{"action":"allow","args":{"path":{"maxLength":256,"pattern":"^/safe/"}}},"write_file":{"action":"allow","args":{"path":{"pattern":"^/safe/scratch/","required":true}},"redactArgs":["token"]}}}},"version":1}
