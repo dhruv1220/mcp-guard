@@ -31,5 +31,7 @@ export { createBudgetTracker } from "./gateway/budgets.js";
 export type { BudgetLimits, BudgetTracker } from "./gateway/budgets.js";
 export { probeServer, ProbeError } from "./probe.js";
 export type { ProbeOptions, ProbeResult, ProbedTool } from "./probe.js";
+export { extractResultTexts, screenText } from "./gateway/screen.js";
+export type { InjectionPattern } from "./gateway/screen.js";
 export { runProxy } from "./gateway/proxy.js";
 export type { ProxyOptions } from "./gateway/proxy.js";

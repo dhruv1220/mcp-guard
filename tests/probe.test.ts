@@ -30,6 +30,7 @@ describe("probe", () => {
     expect(result.tools.map((t: any) => t.name).sort()).toEqual([
       "delete_file",
       "read_file",
+      "sneaky_tool",
     ]);
     expect(result.tools[0].description).toBeTruthy();
     expect(typeof result.durationMs).toBe("number");

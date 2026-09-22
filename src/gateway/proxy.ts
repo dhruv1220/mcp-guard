@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { decide, loadPolicy, type GatewayPolicy } from "./policy.js";
 import { createAuditor, redactArgsForLog, type Auditor } from "./audit.js";
 import { createBudgetTracker } from "./budgets.js";
+import { extractResultTexts, screenText } from "./screen.js";
 
 /**
  * Transparent enforcement proxy for one MCP server.
@@ -66,6 +67,7 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
     );
     const logArgs = policy.logArgs ?? true;
     const budgets = createBudgetTracker(policy.budgets);
+    const screenOutput = policy.screenOutput ?? true;
 
     const child = spawn(opts.command, opts.commandArgs, {
       stdio: ["pipe", "pipe", "inherit"],
@@ -197,6 +199,14 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
           pending.delete(id as JsonRpcId);
           const resultBytes = Buffer.byteLength(line, "utf8");
           budgets?.recordResult(resultBytes);
+          let injectionFlags: string[] | undefined;
+          if (screenOutput) {
+            const flags = new Set<string>();
+            for (const text of extractResultTexts(msg["result"])) {
+              for (const f of screenText(text)) flags.add(f);
+            }
+            if (flags.size > 0) injectionFlags = [...flags];
+          }
           auditor.log({
             server: opts.serverName,
             tool: call.tool,
@@ -205,6 +215,7 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
             args: call.args,
             durationMs: Date.now() - call.startedAt,
             resultBytes,
+            injectionFlags,
           });
         }
       }

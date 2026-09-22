@@ -19,6 +19,8 @@ export interface AuditRecord {
   durationMs?: number;
   /** Byte size of the tool result for allowed calls. */
   resultBytes?: number;
+  /** Injection patterns flagged in the tool result (screening is flag-only). */
+  injectionFlags?: string[];
 }
 
 const SECRET_VALUE = new RegExp(
