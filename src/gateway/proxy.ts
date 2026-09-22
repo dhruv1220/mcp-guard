@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { decide, loadPolicy, type GatewayPolicy } from "./policy.js";
 import { createAuditor, redactArgsForLog, type Auditor } from "./audit.js";
+import { createBudgetTracker } from "./budgets.js";
 
 /**
  * Transparent enforcement proxy for one MCP server.
@@ -64,6 +65,7 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
       policy.logArgs ?? true
     );
     const logArgs = policy.logArgs ?? true;
+    const budgets = createBudgetTracker(policy.budgets);
 
     const child = spawn(opts.command, opts.commandArgs, {
       stdio: ["pipe", "pipe", "inherit"],
@@ -132,23 +134,32 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
       const args = asRecord(params["arguments"]);
       const decision = decide(policy, opts.serverName, tool, args);
       const loggedArgs = logArgs ? redactArgsForLog(args, decision.redactArgs) : undefined;
-      if (decision.action === "deny") {
+      const deny = (decision: "allow" | "deny", reason: string): void => {
         auditor.log({
           server: opts.serverName,
           tool,
-          decision: "deny",
-          reason: decision.reason,
+          decision,
+          reason,
           args: loggedArgs,
         });
         writeStdout(
           JSON.stringify({
             jsonrpc: "2.0",
             id,
-            error: { code: -32602, message: `mcp-guard: ${decision.reason}` },
+            error: { code: -32602, message: `mcp-guard: ${reason}` },
           })
         );
+      };
+      if (decision.action === "deny") {
+        deny("deny", decision.reason);
         return;
       }
+      const budgetBlock = budgets?.checkBeforeCall();
+      if (budgetBlock) {
+        deny("deny", budgetBlock);
+        return;
+      }
+      budgets?.recordCall();
       pending.set(id, {
         tool,
         args: loggedArgs ?? {},
@@ -184,6 +195,8 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
         const call = id !== undefined && id !== null ? pending.get(id) : undefined;
         if (call) {
           pending.delete(id as JsonRpcId);
+          const resultBytes = Buffer.byteLength(line, "utf8");
+          budgets?.recordResult(resultBytes);
           auditor.log({
             server: opts.serverName,
             tool: call.tool,
@@ -191,7 +204,7 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
             reason: call.reason,
             args: call.args,
             durationMs: Date.now() - call.startedAt,
-            resultBytes: Buffer.byteLength(line, "utf8"),
+            resultBytes,
           });
         }
       }

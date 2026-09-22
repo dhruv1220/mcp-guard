@@ -27,5 +27,7 @@ export type {
 } from "./gateway/policy.js";
 export { createAuditor, redactArgsForLog } from "./gateway/audit.js";
 export type { AuditRecord, Auditor } from "./gateway/audit.js";
+export { createBudgetTracker } from "./gateway/budgets.js";
+export type { BudgetLimits, BudgetTracker } from "./gateway/budgets.js";
 export { runProxy } from "./gateway/proxy.js";
 export type { ProxyOptions } from "./gateway/proxy.js";

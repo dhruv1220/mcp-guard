@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { BudgetLimits } from "./budgets.js";
 
 /**
  * Policy engine for the mcp-guard gateway.
@@ -64,6 +65,8 @@ export interface GatewayPolicy {
   auditLog?: string;
   /** Include (redacted) arguments in the audit log. Default: true. */
   logArgs?: boolean;
+  /** Session budgets: maxCalls, maxResultBytes, maxSessionMs. */
+  budgets?: BudgetLimits;
   servers?: Record<string, ServerPolicy>;
 }
 
@@ -108,6 +111,20 @@ export function loadPolicy(path: string): GatewayPolicy {
   const p = data as Record<string, unknown>;
   if (p["version"] !== 1) throw new PolicyError(`unsupported policy version (want 1): ${path}`);
   assertAction(p["defaultAction"], "defaultAction");
+  if (p["budgets"] !== undefined) {
+    const b = p["budgets"];
+    if (typeof b !== "object" || b === null) {
+      throw new PolicyError(`budgets must be an object: ${path}`);
+    }
+    for (const [key, value] of Object.entries(b as Record<string, unknown>)) {
+      if (!["maxCalls", "maxResultBytes", "maxSessionMs"].includes(key)) {
+        throw new PolicyError(`budgets: unknown budget "${key}": ${path}`);
+      }
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        throw new PolicyError(`budgets: "${key}" must be a positive number: ${path}`);
+      }
+    }
+  }
   if (p["servers"] !== undefined && (typeof p["servers"] !== "object" || p["servers"] === null)) {
     throw new PolicyError(`servers must be an object: ${path}`);
   }
