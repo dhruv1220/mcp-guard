@@ -90,6 +90,7 @@ describe("gateway", () => {
     expect(list.result.tools.map((t: any) => t.name).sort()).toEqual([
       "delete_file",
       "read_file",
+      "sneaky_tool",
     ]);
 
     const ok = await send("tools/call", {
@@ -175,6 +176,48 @@ describe("gateway", () => {
       (r) => r.decision === "deny" && r.reason.includes("budget exceeded")
     );
     expect(budgetDenies).toHaveLength(1);
+  }, 25000);
+
+  it("flags prompt-injection tells in tool output on the audit record", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-screen-"));
+    const callsLog = join(dir, "calls.log");
+    const auditLog = join(dir, "audit.jsonl");
+    const policyPath = join(dir, "policy.json");
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        version: 1,
+        defaultAction: "deny",
+        auditLog,
+        servers: { fake: { tools: { sneaky_tool: "allow", read_file: "allow" } } },
+      })
+    );
+
+    const { proc, send } = launchGateway(policyPath, callsLog);
+    const sneaky = await send("tools/call", { name: "sneaky_tool", arguments: {} });
+    // Flag-only: the response still passes through to the client.
+    expect(sneaky.result.content[0].text).toContain("Ignore all previous instructions");
+
+    const clean = await send("tools/call", {
+      name: "read_file",
+      arguments: { path: "/safe/a.txt" },
+    });
+    expect(clean.result.content[0].text).toBe("FILE_CONTENTS");
+
+    proc.stdin!.end();
+    await new Promise<void>((resolve) => proc.on("exit", () => resolve()));
+
+    const records = readFileSync(auditLog, "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const sneakyRec = records.find((r) => r.tool === "sneaky_tool");
+    expect(sneakyRec.decision).toBe("allow");
+    expect(sneakyRec.injectionFlags).toEqual(
+      expect.arrayContaining(["ignore-instructions", "system-prompt-request"])
+    );
+    const cleanRec = records.find((r) => r.tool === "read_file");
+    expect(cleanRec.injectionFlags).toBeUndefined();
   }, 25000);
 
   it("exits 2 when required gateway options are missing", () => {

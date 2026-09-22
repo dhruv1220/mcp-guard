@@ -65,6 +65,8 @@ export interface GatewayPolicy {
   auditLog?: string;
   /** Include (redacted) arguments in the audit log. Default: true. */
   logArgs?: boolean;
+  /** Screen tool output for prompt-injection tells (flag-only). Default: true. */
+  screenOutput?: boolean;
   /** Session budgets: maxCalls, maxResultBytes, maxSessionMs. */
   budgets?: BudgetLimits;
   servers?: Record<string, ServerPolicy>;
@@ -111,6 +113,9 @@ export function loadPolicy(path: string): GatewayPolicy {
   const p = data as Record<string, unknown>;
   if (p["version"] !== 1) throw new PolicyError(`unsupported policy version (want 1): ${path}`);
   assertAction(p["defaultAction"], "defaultAction");
+  if (p["screenOutput"] !== undefined && typeof p["screenOutput"] !== "boolean") {
+    throw new PolicyError(`screenOutput must be a boolean: ${path}`);
+  }
   if (p["budgets"] !== undefined) {
     const b = p["budgets"];
     if (typeof b !== "object" || b === null) {
