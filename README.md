@@ -8,7 +8,8 @@ AI agents now consume dozens of MCP servers, skills, and plugins — most of the
 
 - **`mcpguard scan`** — statically audit an MCP client config (`mcpServers` JSON) for authentication gaps, insecure transport, hardcoded secrets, risky commands, and npm supply-chain risk. Findings are severity-ranked, secrets are redacted in output, and `--fail-on` gates CI.
 - **`mcpguard gateway`** — a transparent enforcement proxy for one MCP server: every `tools/call` is checked against a JSON policy (per-tool allow/deny/approval, argument patterns, enums, max lengths) before it reaches the server. Denied calls get a JSON-RPC error and are never forwarded; every decision lands in a JSONL audit log with redacted arguments, latency, and result size. Fail-closed: a crashed server ends the session.
-- **Roadmap** — token/cost budgets with circuit breakers, prompt-injection screening of tool output, live tool-surface probing, and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
+- **`mcpguard probe`** — enumerate a server's real tool surface: spawns it, runs `initialize` + `tools/list`, and prints the tools (names, descriptions, input schemas) as JSON. Know what you're about to write a policy for.
+- **Roadmap** — prompt-injection screening of tool output and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
 
 ## Quickstart
 
@@ -63,6 +64,16 @@ circuit breaks and every further `tools/call` is denied:
 
 Budgets measure what the proxy can observe honestly — forwarded call count, total
 tool-result bytes, wall time. Token/cost estimation is out of scope for v1.
+
+## Probing a server's tool surface
+
+```bash
+mcpguard probe -- node my-server.mjs
+```
+
+Spawns the server, runs `initialize` + `tools/list`, and prints the real tool
+surface as JSON — know what you're about to write a policy for. Fails fast on
+spawn errors; `--timeout <ms>` bounds the whole probe (default 15000).
 
 ## Checks (v0.1)
 

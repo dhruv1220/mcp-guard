@@ -11,6 +11,7 @@ import { ConfigError, loadConfig } from "./config.js";
 import { breachesThreshold, runChecks } from "./scanner/engine.js";
 import { formatJson, formatTable } from "./report.js";
 import { runProxy } from "./gateway/proxy.js";
+import { probeServer, ProbeError } from "./probe.js";
 import type { Severity } from "./scanner/types.js";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -33,10 +34,12 @@ function usage(): string {
     "Usage:",
     "  mcpguard scan --config <path> [--format table|json] [--fail-on <severity>] [--no-network]",
     "  mcpguard gateway --policy <path> --server <name> -- <command> [args...]",
+    "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
     "",
     "Commands:",
     "  scan                 statically audit an MCP client config",
     "  gateway              transparent policy-enforcing proxy for one MCP server",
+    "  probe                enumerate a server's real tool surface (initialize + tools/list)",
     "",
     "Options:",
     "  --config <path>      MCP client config JSON (with an \"mcpServers\" block)",
@@ -45,6 +48,7 @@ function usage(): string {
     "  --no-network         skip checks that need network access",
     "  --policy <path>      gateway policy JSON (required for gateway)",
     "  --server <name>      server name as listed in the policy (required for gateway)",
+    "  --timeout <ms>       probe timeout in milliseconds (default: 15000)",
     "  --help               show this help",
     "  --version            show version",
   ].join("\n");
@@ -58,6 +62,7 @@ interface Args {
   noNetwork: boolean;
   policy?: string;
   server?: string;
+  timeoutMs?: number;
   commandArgs: string[];
 }
 
@@ -74,7 +79,11 @@ function parseArgs(argv: string[]): Args {
     } else if (a === "--config") args.config = rest.shift();
     else if (a === "--policy") args.policy = rest.shift();
     else if (a === "--server") args.server = rest.shift();
-    else if (a === "--format") {
+    else if (a === "--timeout") {
+      const t = Number(rest.shift());
+      if (!Number.isFinite(t) || t <= 0) throw new ConfigError("--timeout must be a positive number");
+      args.timeoutMs = t;
+    } else if (a === "--format") {
       const f = rest.shift();
       if (f !== "table" && f !== "json") throw new ConfigError(`--format must be table or json`);
       args.format = f;
@@ -101,6 +110,28 @@ async function main(): Promise<void> {
   if (!args.command || args.command === "help") {
     console.log(usage());
     process.exit(args.command === "help" ? 0 : 2);
+  }
+  if (args.command === "probe") {
+    if (args.commandArgs.length === 0) {
+      console.error("missing server command after --\n");
+      console.error(usage());
+      process.exit(2);
+    }
+    try {
+      const result = await probeServer({
+        command: args.commandArgs[0]!,
+        commandArgs: args.commandArgs.slice(1),
+        timeoutMs: args.timeoutMs,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      if (err instanceof ProbeError) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    return;
   }
   if (args.command === "gateway") {
     if (!args.policy) {
