@@ -76,6 +76,12 @@ export interface Decision {
   action: "allow" | "deny";
   reason: string;
   redactArgs: string[];
+  /**
+   * True when the rule wanted interactive operator approval. The action is
+   * still "deny" (fail-closed); the gateway may prompt the operator instead
+   * when running with --interactive.
+   */
+  approvalRequired?: boolean;
 }
 
 export class PolicyError extends Error {
@@ -210,6 +216,7 @@ export function decide(
       action: "deny",
       reason: `tool "${tool}" requires approval (non-interactive gateway denies)`,
       redactArgs: rule?.redactArgs ?? [],
+      approvalRequired: true,
     };
   }
   const argMap =
