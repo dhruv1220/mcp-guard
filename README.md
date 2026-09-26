@@ -90,6 +90,31 @@ tool set to `approval` so nothing runs until you allowlist it):
 mcpguard init-policy --server filesystem -- npx -y @modelcontextprotocol/server-filesystem /safe > policy.json
 ```
 
+## Interactive approval + learning a tightened policy
+
+The starter policy sets every tool to `"approval"`. Run the gateway with
+`--interactive` and the operator is prompted on the controlling terminal
+(never the JSON-RPC stream) before each risky call — `y` once, `a` always
+this session, `n` deny, `x` never. Anything else (timeout, EOF, no
+terminal) fails closed:
+
+```bash
+mcpguard gateway --policy ./policy.json --server filesystem --interactive -- \
+  npx -y @modelcontextprotocol/server-filesystem /safe
+```
+
+Every decision is recorded in the audit log. Afterwards, freeze what you
+observed into a tight deny-by-default policy — allowed tools become
+`allow`, only-ever-denied tools become `deny`, unobserved tools stay
+covered by the default:
+
+```bash
+mcpguard learn --audit ./mcpguard-audit.jsonl --server filesystem > tight-policy.json
+```
+
+Review the learned policy before deploying: it reflects what happened,
+not what should happen.
+
 ## Checks (v0.1)
 
 | Check ID | Severity | What it flags |

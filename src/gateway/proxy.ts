@@ -3,6 +3,7 @@ import { decide, loadPolicy, type GatewayPolicy } from "./policy.js";
 import { createAuditor, redactArgsForLog, type Auditor } from "./audit.js";
 import { createBudgetTracker } from "./budgets.js";
 import { extractResultTexts, screenText } from "./screen.js";
+import { createApprover, type Approver } from "./approve.js";
 
 /**
  * Transparent enforcement proxy for one MCP server.
@@ -22,6 +23,14 @@ export interface ProxyOptions {
   serverName: string;
   command: string;
   commandArgs: string[];
+  /**
+   * When true, policy rules with action "approval" prompt the operator on
+   * the controlling terminal instead of being denied. Requires a terminal;
+   * without one, approvals fail closed (deny).
+   */
+  interactive?: boolean;
+  /** Operator prompt timeout in ms for interactive approvals. Default: 60000. */
+  approvalTimeoutMs?: number;
 }
 
 interface PendingCall {
@@ -68,6 +77,11 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
     const logArgs = policy.logArgs ?? true;
     const budgets = createBudgetTracker(policy.budgets);
     const screenOutput = policy.screenOutput ?? true;
+    const approver: Approver | undefined = opts.interactive
+      ? createApprover({ timeoutMs: opts.approvalTimeoutMs })
+      : undefined;
+    // Operator prompts must not interleave: serialize interactive approvals.
+    let approvalQueue: Promise<void> = Promise.resolve();
 
     const child = spawn(opts.command, opts.commandArgs, {
       stdio: ["pipe", "pipe", "inherit"],
@@ -116,9 +130,21 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
   });
 
   // Client -> server: intercept tools/call requests.
+  // The handler is async (interactive approvals pause for the operator),
+  // so each line is handled independently; approvals are serialized
+  // separately so prompts never interleave.
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk: string) => {
     fromClient.push(chunk, (line) => {
+      void handleClientLine(line).catch((err: unknown) => {
+        process.stderr.write(
+          `mcp-guard: client handler error: ${(err as Error).message}\n`
+        );
+      });
+    });
+  });
+
+  async function handleClientLine(line: string): Promise<void> {
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(line) as Record<string, unknown>;
@@ -152,25 +178,49 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
           })
         );
       };
+      const forward = (reason: string): void => {
+        const budgetBlock = budgets?.checkBeforeCall();
+        if (budgetBlock) {
+          deny("deny", budgetBlock);
+          return;
+        }
+        budgets?.recordCall();
+        pending.set(id, {
+          tool,
+          args: loggedArgs ?? {},
+          reason,
+          startedAt: Date.now(),
+        });
+        child.stdin?.write(line + "\n");
+      };
       if (decision.action === "deny") {
+        if (decision.approvalRequired && approver) {
+          const outcome = await new Promise<{ allowed: boolean; reason: string }>(
+            (resolve) => {
+              approvalQueue = approvalQueue.then(async () => {
+                try {
+                  resolve(await approver.ask(opts.serverName, tool, loggedArgs ?? {}));
+                } catch (err) {
+                  resolve({
+                    allowed: false,
+                    reason: `approval failed: ${(err as Error).message}`,
+                  });
+                }
+              });
+            }
+          );
+          if (outcome.allowed) {
+            forward(outcome.reason);
+          } else {
+            deny("deny", outcome.reason);
+          }
+          return;
+        }
         deny("deny", decision.reason);
         return;
       }
-      const budgetBlock = budgets?.checkBeforeCall();
-      if (budgetBlock) {
-        deny("deny", budgetBlock);
-        return;
-      }
-      budgets?.recordCall();
-      pending.set(id, {
-        tool,
-        args: loggedArgs ?? {},
-        reason: decision.reason,
-        startedAt: Date.now(),
-      });
-      child.stdin?.write(line + "\n");
-    });
-  });
+      forward(decision.reason);
+  }
   process.stdin.on("end", () => {
     try {
       child.stdin?.end();

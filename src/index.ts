@@ -1,4 +1,4 @@
-// mcp-guard public API. Scanner ships in v0.1; gateway lands next.
+// mcp-guard public API.
 export type {
   Check,
   CheckContext,
@@ -36,3 +36,7 @@ export type { InjectionPattern } from "./gateway/screen.js";
 export { generatePolicy } from "./policygen.js";
 export { runProxy } from "./gateway/proxy.js";
 export type { ProxyOptions } from "./gateway/proxy.js";
+export { createApprover, parseApprovalAnswer } from "./gateway/approve.js";
+export type { ApprovalAnswer, ApprovalOutcome, Approver, ApproverOptions } from "./gateway/approve.js";
+export { learnPolicy, LearnError } from "./learn.js";
+export type { LearnOptions } from "./learn.js";

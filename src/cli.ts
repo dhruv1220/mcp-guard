@@ -4,15 +4,18 @@
  * or proxy a server through the enforcement gateway.
  *
  *   mcpguard scan --config ./mcp.json [--format table|json] [--fail-on medium] [--no-network]
- *   mcpguard gateway --policy ./policy.json --server <name> -- <command> [args...]
+ *   mcpguard gateway --policy ./policy.json --server <name> [--interactive] -- <command> [args...]
+ *   mcpguard learn --audit ./mcpguard-audit.jsonl [--server <name>] [--out ./policy.json]
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { ConfigError, loadConfig } from "./config.js";
 import { breachesThreshold, runChecks } from "./scanner/engine.js";
 import { formatJson, formatTable } from "./report.js";
 import { runProxy } from "./gateway/proxy.js";
 import { probeServer, ProbeError } from "./probe.js";
 import { generatePolicy } from "./policygen.js";
+import { learnPolicy, LearnError } from "./learn.js";
+import { loadPolicy } from "./gateway/policy.js";
 import type { Severity } from "./scanner/types.js";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -34,15 +37,17 @@ function usage(): string {
     "",
     "Usage:",
     "  mcpguard scan --config <path> [--format table|json] [--fail-on <severity>] [--no-network]",
-    "  mcpguard gateway --policy <path> --server <name> -- <command> [args...]",
+    "  mcpguard gateway --policy <path> --server <name> [--interactive] [--approval-timeout <ms>] -- <command> [args...]",
     "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
     "  mcpguard init-policy --server <name> [--default allow|deny] [--timeout <ms>] -- <command> [args...]",
+    "  mcpguard learn --audit <path> [--server <name>] [--out <path>]",
     "",
     "Commands:",
     "  scan                 statically audit an MCP client config",
     "  gateway              transparent policy-enforcing proxy for one MCP server",
     "  probe                enumerate a server's real tool surface (initialize + tools/list)",
     "  init-policy          print a starter deny-by-default policy from a live probe",
+    "  learn                build a tightened policy from a gateway audit log",
     "",
     "Options:",
     "  --config <path>      MCP client config JSON (with an \"mcpServers\" block)",
@@ -52,6 +57,10 @@ function usage(): string {
     "  --policy <path>      gateway policy JSON (required for gateway)",
     "  --server <name>      server name as listed in the policy (required for gateway)",
     "  --timeout <ms>       probe timeout in milliseconds (default: 15000)",
+    "  --interactive        prompt the operator on the terminal for \"approval\" tools",
+    "  --approval-timeout <ms>  operator prompt timeout in ms (default: 60000)",
+    "  --audit <path>       gateway audit log (JSONL) to learn from (required for learn)",
+    "  --out <path>         write output to a file instead of stdout",
     "  --help               show this help",
     "  --version            show version",
   ].join("\n");
@@ -67,11 +76,21 @@ interface Args {
   server?: string;
   timeoutMs?: number;
   defaultAction?: "allow" | "deny";
+  interactive: boolean;
+  approvalTimeoutMs?: number;
+  audit?: string;
+  out?: string;
   commandArgs: string[];
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { format: "table", failOn: "medium", noNetwork: false, commandArgs: [] };
+  const args: Args = {
+    format: "table",
+    failOn: "medium",
+    noNetwork: false,
+    interactive: false,
+    commandArgs: [],
+  };
   const rest = [...argv];
   args.command = rest.shift();
   while (rest.length > 0) {
@@ -87,7 +106,15 @@ function parseArgs(argv: string[]): Args {
       const t = Number(rest.shift());
       if (!Number.isFinite(t) || t <= 0) throw new ConfigError("--timeout must be a positive number");
       args.timeoutMs = t;
-    } else if (a === "--default") {
+    } else if (a === "--approval-timeout") {
+      const t = Number(rest.shift());
+      if (!Number.isFinite(t) || t <= 0)
+        throw new ConfigError("--approval-timeout must be a positive number");
+      args.approvalTimeoutMs = t;
+    } else if (a === "--interactive") args.interactive = true;
+    else if (a === "--audit") args.audit = rest.shift();
+    else if (a === "--out") args.out = rest.shift();
+    else if (a === "--default") {
       const d = rest.shift();
       if (d !== "allow" && d !== "deny") throw new ConfigError("--default must be allow or deny");
       args.defaultAction = d;
@@ -151,7 +178,8 @@ async function main(): Promise<void> {
     }
     return;
   }
-  if (args.command === "probe") {    if (args.commandArgs.length === 0) {
+  if (args.command === "probe") {
+    if (args.commandArgs.length === 0) {
       console.error("missing server command after --\n");
       console.error(usage());
       process.exit(2);
@@ -194,12 +222,34 @@ async function main(): Promise<void> {
         serverName: args.server,
         command: args.commandArgs[0]!,
         commandArgs: args.commandArgs.slice(1),
+        interactive: args.interactive,
+        approvalTimeoutMs: args.approvalTimeoutMs,
       });
       process.exit(code);
     } catch (err) {
       console.error(`error: ${(err as Error).message}`);
       process.exit(2);
     }
+  }
+  if (args.command === "learn") {
+    if (!args.audit) {
+      console.error("missing required option: --audit <path>\n");
+      console.error(usage());
+      process.exit(2);
+    }
+    try {
+      const policy = learnPolicy(args.audit, { server: args.server });
+      const out = JSON.stringify(policy, null, 2);
+      if (args.out) writeFileSync(args.out, out + "\n");
+      else console.log(out);
+    } catch (err) {
+      if (err instanceof LearnError) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    return;
   }
   if (args.command !== "scan") {
     console.error(`unknown command: ${args.command}\n\n${usage()}`);
