@@ -3,7 +3,7 @@
  * mcpguard CLI — scan MCP client configs for security issues,
  * or proxy a server through the enforcement gateway.
  *
- *   mcpguard scan --config ./mcp.json [--format table|json] [--fail-on medium] [--no-network]
+ *   mcpguard scan --config ./mcp.json [--format table|json|sarif] [--fail-on medium] [--no-network]
  *   mcpguard gateway --policy ./policy.json --server <name> [--interactive] -- <command> [args...]
  *   mcpguard learn --audit ./mcpguard-audit.jsonl [--server <name>] [--out ./policy.json]
  *   mcpguard install-skill [--project] [--force]
@@ -21,6 +21,7 @@ import {
   installSkill,
   SkillError,
 } from "./skill.js";
+import { formatSarif } from "./sarif.js";
 import type { Severity } from "./scanner/types.js";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -41,7 +42,7 @@ function usage(): string {
     `mcpguard v${version()} — security and cost control for MCP servers`,
     "",
     "Usage:",
-    "  mcpguard scan --config <path> [--format table|json] [--fail-on <severity>] [--no-network]",
+    "  mcpguard scan --config <path> [--format table|json|sarif] [--fail-on <severity>] [--no-network]",
     "  mcpguard gateway --policy <path> --server <name> [--interactive] [--approval-timeout <ms>] -- <command> [args...]",
     "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
     "  mcpguard init-policy --server <name> [--default allow|deny] [--timeout <ms>] -- <command> [args...]",
@@ -58,7 +59,7 @@ function usage(): string {
     "",
     "Options:",
     "  --config <path>      MCP client config JSON (with an \"mcpServers\" block)",
-    "  --format <fmt>       table (default) or json",
+    "  --format <fmt>       table (default), json, or sarif",
     "  --fail-on <sev>      exit 1 if findings at/above this severity (default: medium)",
     "  --no-network         skip checks that need network access",
     "  --policy <path>      gateway policy JSON (required for gateway)",
@@ -79,7 +80,7 @@ function usage(): string {
 interface Args {
   command?: string;
   config?: string;
-  format: "table" | "json";
+  format: "table" | "json" | "sarif";
   failOn: Severity;
   noNetwork: boolean;
   policy?: string;
@@ -138,7 +139,8 @@ function parseArgs(argv: string[]): Args {
       args.defaultAction = d;
     } else if (a === "--format") {
       const f = rest.shift();
-      if (f !== "table" && f !== "json") throw new ConfigError(`--format must be table or json`);
+      if (f !== "table" && f !== "json" && f !== "sarif")
+        throw new ConfigError(`--format must be table, json, or sarif`);
       args.format = f;
     } else if (a === "--fail-on") {
       const s = rest.shift() as Severity;
@@ -319,7 +321,10 @@ async function main(): Promise<void> {
   }
 
   const report = await runChecks(servers, { offline: args.noNetwork });
-  console.log(args.format === "json" ? formatJson(report) : formatTable(report));
+  if (args.format === "json") console.log(formatJson(report));
+  else if (args.format === "sarif")
+    console.log(formatSarif(report, { configPath: args.config, toolVersion: version() }));
+  else console.log(formatTable(report));
   process.exit(breachesThreshold(report, args.failOn) ? 1 : 0);
 }
 
