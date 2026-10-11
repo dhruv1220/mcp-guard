@@ -40,3 +40,19 @@ export { createApprover, parseApprovalAnswer } from "./gateway/approve.js";
 export type { ApprovalAnswer, ApprovalOutcome, Approver, ApproverOptions } from "./gateway/approve.js";
 export { learnPolicy, LearnError } from "./learn.js";
 export type { LearnOptions } from "./learn.js";
+export {
+  installSkill,
+  resolveSkillDir,
+  skillStatus,
+  readSkillFrontmatter,
+  findSkillSource,
+  SkillError,
+  SKILL_NAME,
+} from "./skill.js";
+export type {
+  InstallOptions,
+  InstallResult,
+  ResolveOptions,
+  SkillScope,
+  SkillStatus,
+} from "./skill.js";

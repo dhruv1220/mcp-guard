@@ -6,6 +6,7 @@
  *   mcpguard scan --config ./mcp.json [--format table|json] [--fail-on medium] [--no-network]
  *   mcpguard gateway --policy ./policy.json --server <name> [--interactive] -- <command> [args...]
  *   mcpguard learn --audit ./mcpguard-audit.jsonl [--server <name>] [--out ./policy.json]
+ *   mcpguard install-skill [--project] [--force]
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { ConfigError, loadConfig } from "./config.js";
@@ -16,6 +17,10 @@ import { probeServer, ProbeError } from "./probe.js";
 import { generatePolicy } from "./policygen.js";
 import { learnPolicy, LearnError } from "./learn.js";
 import { loadPolicy } from "./gateway/policy.js";
+import {
+  installSkill,
+  SkillError,
+} from "./skill.js";
 import type { Severity } from "./scanner/types.js";
 
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -41,6 +46,7 @@ function usage(): string {
     "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
     "  mcpguard init-policy --server <name> [--default allow|deny] [--timeout <ms>] -- <command> [args...]",
     "  mcpguard learn --audit <path> [--server <name>] [--out <path>]",
+    "  mcpguard install-skill [--project] [--force] [--dir <path>]",
     "",
     "Commands:",
     "  scan                 statically audit an MCP client config",
@@ -48,6 +54,7 @@ function usage(): string {
     "  probe                enumerate a server's real tool surface (initialize + tools/list)",
     "  init-policy          print a starter deny-by-default policy from a live probe",
     "  learn                build a tightened policy from a gateway audit log",
+    "  install-skill        install the mcp-guard skill for Claude Code",
     "",
     "Options:",
     "  --config <path>      MCP client config JSON (with an \"mcpServers\" block)",
@@ -61,6 +68,9 @@ function usage(): string {
     "  --approval-timeout <ms>  operator prompt timeout in ms (default: 60000)",
     "  --audit <path>       gateway audit log (JSONL) to learn from (required for learn)",
     "  --out <path>         write output to a file instead of stdout",
+    "  --project            install-skill: project-level .claude/skills instead of ~/.claude/skills",
+    "  --force              install-skill: overwrite an existing skill installation",
+    "  --dir <path>         install-skill: install to an explicit directory",
     "  --help               show this help",
     "  --version            show version",
   ].join("\n");
@@ -80,6 +90,9 @@ interface Args {
   approvalTimeoutMs?: number;
   audit?: string;
   out?: string;
+  project: boolean;
+  force: boolean;
+  dir?: string;
   commandArgs: string[];
 }
 
@@ -89,10 +102,15 @@ function parseArgs(argv: string[]): Args {
     failOn: "medium",
     noNetwork: false,
     interactive: false,
+    project: false,
+    force: false,
     commandArgs: [],
   };
   const rest = [...argv];
   args.command = rest.shift();
+  // bare `mcpguard --help` / `--version` (flag in command position)
+  if (args.command === "--help" || args.command === "-h") args.command = "help";
+  else if (args.command === "--version" || args.command === "-v") args.command = "version";
   while (rest.length > 0) {
     const a = rest.shift()!;
     if (a === "--") {
@@ -128,6 +146,9 @@ function parseArgs(argv: string[]): Args {
         throw new ConfigError(`--fail-on must be one of: ${SEVERITIES.join(", ")}`);
       args.failOn = s;
     } else if (a === "--no-network") args.noNetwork = true;
+    else if (a === "--project") args.project = true;
+    else if (a === "--force") args.force = true;
+    else if (a === "--dir") args.dir = rest.shift();
     else if (a === "--help" || a === "-h") args.command = "help";
     else if (a === "--version" || a === "-v") args.command = "version";
     else throw new ConfigError(`unknown argument: ${a}`);
@@ -244,6 +265,34 @@ async function main(): Promise<void> {
       else console.log(out);
     } catch (err) {
       if (err instanceof LearnError) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    return;
+  }
+  if (args.command === "install-skill") {
+    try {
+      const result = installSkill({
+        scope: args.project ? "project" : "user",
+        force: args.force,
+        dir: args.dir,
+      });
+      if (!result.installed) {
+        console.log(`skill already installed at ${result.dir}`);
+        console.log("re-run with --force to overwrite it.");
+        return;
+      }
+      console.log(`installed mcp-guard skill to ${result.dir}`);
+      console.log(
+        "Claude Code will now offer to scan MCP configs, probe new servers, and harden them with the gateway."
+      );
+      if (result.scope === "project") {
+        console.log("project-level install: commit .claude/skills to share it with your team.");
+      }
+    } catch (err) {
+      if (err instanceof SkillError) {
         console.error(`error: ${err.message}`);
         process.exit(1);
       }
