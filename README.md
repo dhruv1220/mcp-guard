@@ -20,6 +20,13 @@ mcpguard scan --config ~/.claude.json
 mcpguard scan --config ./mcp.json --format json --fail-on high
 ```
 
+For CI code scanning, emit SARIF 2.1.0 and upload it:
+
+```bash
+mcpguard scan --config ./mcp.json --format sarif --fail-on high > results.sarif
+# then upload results.sarif with your SARIF uploader (e.g. github/codeql-action/upload-sarif)
+```
+
 ## Gateway (v0.2)
 
 Wrap any stdio MCP server with a policy:

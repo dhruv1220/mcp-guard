@@ -11,6 +11,8 @@ export type {
 export { loadConfig, ConfigError } from "./config.js";
 export { ALL_CHECKS, breachesThreshold, runChecks } from "./scanner/engine.js";
 export { formatJson, formatTable } from "./report.js";
+export { formatSarif } from "./sarif.js";
+export type { SarifOptions } from "./sarif.js";
 export {
   decide,
   loadPolicy,
