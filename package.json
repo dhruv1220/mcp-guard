@@ -12,7 +12,8 @@
     "node": ">=20"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "license": "MIT",
   "name": "mcp-guard",
@@ -27,5 +28,5 @@
     "typecheck": "tsc --noEmit"
   },
   "type": "module",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

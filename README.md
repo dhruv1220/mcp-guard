@@ -9,7 +9,7 @@ AI agents now consume dozens of MCP servers, skills, and plugins — most of the
 - **`mcpguard scan`** — statically audit an MCP client config (`mcpServers` JSON) for authentication gaps, insecure transport, hardcoded secrets, risky commands, and npm supply-chain risk. Findings are severity-ranked, secrets are redacted in output, and `--fail-on` gates CI.
 - **`mcpguard gateway`** — a transparent enforcement proxy for one MCP server: every `tools/call` is checked against a JSON policy (per-tool allow/deny/approval, argument patterns, enums, max lengths) before it reaches the server. Denied calls get a JSON-RPC error and are never forwarded; every decision lands in a JSONL audit log with redacted arguments, latency, and result size. Session budgets (`maxCalls`, `maxResultBytes`, `maxSessionMs`) trip a circuit breaker against runaway agents, and tool output is screened for prompt-injection tells (flagged on the audit record). Fail-closed: a crashed server ends the session.
 - **`mcpguard probe`** — enumerate a server's real tool surface: spawns it, runs `initialize` + `tools/list`, and prints the tools (names, descriptions, input schemas) as JSON. Know what you're about to write a policy for.
-- **Roadmap** — prompt-injection screening of tool output and a Claude Code skill. See [issues](https://github.com/dhruv1220/mcp-guard/issues).
+- **Roadmap** — the v0.1/v0.2 roadmap (gateway, budgets, injection screening, probing, policy learning, Claude Code skill) is complete. See [issues](https://github.com/dhruv1220/mcp-guard/issues) for what's next.
 
 ## Quickstart
 
@@ -72,6 +72,20 @@ instructions`, `reveal the system prompt`, `you are now …`, etc.). Screening i
 flag-only — matches are recorded as `injectionFlags` on the audit record, never
 used to block, since detection is heuristic. Disable with
 `"screenOutput": false` in the policy.
+
+## Claude Code skill
+
+Teach Claude Code to audit and harden your MCP setup for you:
+
+```bash
+mcpguard install-skill            # user-level: ~/.claude/skills/mcp-guard
+mcpguard install-skill --project  # project-level: .claude/skills/mcp-guard (commit it)
+```
+
+Once installed, Claude Code will offer to `scan` your MCP configs when you add
+a server, `probe` unfamiliar servers before you trust them, and walk you
+through the harden loop: `init-policy` → `gateway` → `learn`. Re-run with
+`--force` to refresh the skill after upgrading mcp-guard.
 
 ## Probing a server's tool surface
 
