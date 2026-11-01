@@ -6,6 +6,7 @@
  *   mcpguard scan --config ./mcp.json [--format table|json|sarif] [--fail-on medium] [--no-network]
  *   mcpguard gateway --policy ./policy.json --server <name> [--interactive] -- <command> [args...]
  *   mcpguard learn --audit ./mcpguard-audit.jsonl [--server <name>] [--out ./policy.json]
+ *   mcpguard audit --audit ./mcpguard-audit.jsonl [--server <name>] [--format table|json]
  *   mcpguard install-skill [--project] [--force]
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -16,6 +17,7 @@ import { runProxy } from "./gateway/proxy.js";
 import { probeServer, ProbeError } from "./probe.js";
 import { generatePolicy } from "./policygen.js";
 import { learnPolicy, LearnError } from "./learn.js";
+import { formatAuditTable, summarizeAudit, AuditError } from "./audit-report.js";
 import { loadPolicy } from "./gateway/policy.js";
 import {
   installSkill,
@@ -47,6 +49,7 @@ function usage(): string {
     "  mcpguard probe [--timeout <ms>] -- <command> [args...]",
     "  mcpguard init-policy --server <name> [--default allow|deny] [--timeout <ms>] -- <command> [args...]",
     "  mcpguard learn --audit <path> [--server <name>] [--out <path>]",
+    "  mcpguard audit --audit <path> [--server <name>] [--format table|json]",
     "  mcpguard install-skill [--project] [--force] [--dir <path>]",
     "",
     "Commands:",
@@ -55,6 +58,7 @@ function usage(): string {
     "  probe                enumerate a server's real tool surface (initialize + tools/list)",
     "  init-policy          print a starter deny-by-default policy from a live probe",
     "  learn                build a tightened policy from a gateway audit log",
+    "  audit                summarize a gateway audit log: denials, reasons, injection flags",
     "  install-skill        install the mcp-guard skill for Claude Code",
     "",
     "Options:",
@@ -267,6 +271,25 @@ async function main(): Promise<void> {
       else console.log(out);
     } catch (err) {
       if (err instanceof LearnError) {
+        console.error(`error: ${err.message}`);
+        process.exit(1);
+      }
+      throw err;
+    }
+    return;
+  }
+  if (args.command === "audit") {
+    if (!args.audit) {
+      console.error("missing required option: --audit <path>\n");
+      console.error(usage());
+      process.exit(2);
+    }
+    try {
+      const summary = summarizeAudit(args.audit, { server: args.server });
+      if (args.format === "json") console.log(JSON.stringify(summary, null, 2));
+      else console.log(formatAuditTable(summary));
+    } catch (err) {
+      if (err instanceof AuditError) {
         console.error(`error: ${err.message}`);
         process.exit(1);
       }

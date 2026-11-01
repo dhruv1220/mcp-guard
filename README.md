@@ -124,8 +124,16 @@ mcpguard gateway --policy ./policy.json --server filesystem --interactive -- \
   npx -y @modelcontextprotocol/server-filesystem /safe
 ```
 
-Every decision is recorded in the audit log. Afterwards, freeze what you
-observed into a tight deny-by-default policy — allowed tools become
+Every decision is recorded in the audit log. Review what the gateway did
+before tightening — totals, denials by reason, most-denied tools, and
+injection-screen flags (arguments are never printed):
+
+```bash
+mcpguard audit --audit ./mcpguard-audit.jsonl --server filesystem
+mcpguard audit --audit ./mcpguard-audit.jsonl --format json
+```
+
+Afterwards, freeze what you observed into a tight deny-by-default policy — allowed tools become
 `allow`, only-ever-denied tools become `deny`, unobserved tools stay
 covered by the default:
 
