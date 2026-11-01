@@ -79,6 +79,45 @@ describe("cli", () => {
     }
   });
 
+  it("audit summarizes a gateway log as a table and as json", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-audit-cli-"));
+    const auditPath = join(dir, "audit.jsonl");
+    writeFileSync(
+      auditPath,
+      [
+        JSON.stringify({ ts: "2026-10-31T10:00:00Z", server: "files", tool: "read_file", decision: "allow", reason: "t" }),
+        JSON.stringify({ ts: "2026-10-31T10:00:01Z", server: "files", tool: "delete_file", decision: "deny", reason: "denied by policy" }),
+      ].join("\n")
+    );
+    const table = execFileSync("node", [cli, "audit", "--audit", auditPath], {
+      encoding: "utf-8",
+    });
+    expect(table).toContain("2 call(s), 1 allowed, 1 denied");
+    expect(table).toContain("files/delete_file");
+    const json = execFileSync(
+      "node",
+      [cli, "audit", "--audit", auditPath, "--format", "json"],
+      { encoding: "utf-8" }
+    );
+    expect(JSON.parse(json).totals).toMatchObject({ calls: 2, allowed: 1, denied: 1 });
+  });
+
+  it("audit exits 1 on an unreadable log and 2 without --audit", () => {
+    const run = (args: string[]) => {
+      try {
+        execFileSync("node", [cli, "audit", ...args], {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        return 0;
+      } catch (err: any) {
+        return err.status ?? 99;
+      }
+    };
+    expect(run(["--audit", join(tmpdir(), "nope.jsonl")])).toBe(1);
+    expect(run([])).toBe(2);
+  });
+
   it("learn requires --audit", () => {
     try {
       execFileSync("node", [cli, "learn"], { encoding: "utf-8" });

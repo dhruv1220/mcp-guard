@@ -101,7 +101,9 @@ full loop and report each step:
    constraints, keep everything else `deny` or `approval`.
 5. `mcpguard gateway --policy ./policy.json --server <name> -- <server command>`
    — run behind the gateway.
-6. `mcpguard learn --audit ./mcpguard-audit.jsonl --server <name>` — tighten.
+6. `mcpguard audit --audit ./mcpguard-audit.jsonl --server <name>` — review
+   what was allowed, denied, and flagged before tightening.
+7. `mcpguard learn --audit ./mcpguard-audit.jsonl --server <name>` — tighten.
 
 ## Rules
 

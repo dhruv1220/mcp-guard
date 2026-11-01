@@ -21,6 +21,7 @@ const KNOWN_COMMANDS = new Set([
   "probe",
   "init-policy",
   "learn",
+  "audit",
   "install-skill",
 ]);
 
