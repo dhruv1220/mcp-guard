@@ -27,6 +27,11 @@ mcpguard scan --config ./mcp.json --format sarif --fail-on high > results.sarif
 # then upload results.sarif with your SARIF uploader (e.g. github/codeql-action/upload-sarif)
 ```
 
+Each SARIF result points at its server's entry in the config file (key line
+through the entry's closing brace), so code scanning anchors the finding on
+the offending server instead of at the top of the file. Findings for a
+server entry that can't be located fall back to the file with no region.
+
 ## Gateway (v0.2)
 
 Wrap any stdio MCP server with a policy:

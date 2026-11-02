@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formatSarif } from "../src/sarif.js";
+import { formatSarif, locateServerEntries } from "../src/sarif.js";
 import { ALL_CHECKS, runChecks } from "../src/scanner/engine.js";
 import { loadConfig } from "../src/config.js";
 import type { ScanReport, Severity } from "../src/scanner/types.js";
@@ -96,6 +98,136 @@ describe("formatSarif", () => {
   });
 });
 
+describe("locateServerEntries", () => {
+  const PRETTY = [
+    "{",
+    '  "mcpServers": {',
+    '    "alpha": {',
+    '      "command": "npx",',
+    '      "args": ["-y", "beta"]',
+    "    },",
+    '    "beta": {',
+    '      "url": "http://0.0.0.0:8080/mcp",',
+    '      "headers": {}',
+    "    }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  it("maps each server entry to its key line through its closing brace", () => {
+    const locations = locateServerEntries(PRETTY);
+    expect(locations.get("alpha")).toEqual({
+      startLine: 3,
+      startColumn: 5,
+      endLine: 6,
+    });
+    expect(locations.get("beta")).toEqual({
+      startLine: 7,
+      startColumn: 5,
+      endLine: 10,
+    });
+  });
+
+  it("does not mistake a name inside another entry's string value for a key", () => {
+    // "beta" appears on line 5 as alpha's arg value; its entry is line 7.
+    const locations = locateServerEntries(PRETTY);
+    expect(locations.get("beta")!.startLine).toBe(7);
+  });
+
+  it("supports a bare top-level map with no mcpServers wrapper", () => {
+    const locations = locateServerEntries(
+      [
+        "{",
+        '  "solo": {',
+        '    "url": "http://example.com/mcp"',
+        "  }",
+        "}",
+        "",
+      ].join("\n")
+    );
+    expect(locations.get("solo")).toEqual({
+      startLine: 2,
+      startColumn: 3,
+      endLine: 4,
+    });
+  });
+
+  it("returns an empty map for malformed JSON instead of throwing", () => {
+    expect(locateServerEntries("{ not json")).toEqual(new Map());
+    expect(locateServerEntries("")).toEqual(new Map());
+  });
+});
+
+describe("formatSarif regions", () => {
+  const SOURCE = [
+    "{",
+    '  "mcpServers": {',
+    '    "beta": {',
+    '      "url": "http://0.0.0.0:8080/mcp"',
+    "    }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  function regionReport(server: string): ScanReport {
+    return {
+      scannedAt: "2026-10-11T00:00:00Z",
+      servers: [server],
+      findings: [
+        {
+          checkId: "plaintext-http",
+          title: "toy",
+          severity: "high",
+          server,
+          message: "plain http",
+          evidence: "redacted",
+          remediation: "use https",
+        },
+      ],
+      summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+      skippedNetworkChecks: false,
+    };
+  }
+
+  it("emits a region for a located server entry", () => {
+    const log = parseSarif(
+      formatSarif(regionReport("beta"), {
+        configPath: "./mcp.json",
+        sourceText: SOURCE,
+      })
+    );
+    expect(
+      log.runs[0].results[0].locations[0].physicalLocation.region
+    ).toEqual({ startLine: 3, startColumn: 5, endLine: 5 });
+  });
+
+  it("omits the region for an unlocated server", () => {
+    const log = parseSarif(
+      formatSarif(regionReport("ghost"), {
+        configPath: "./mcp.json",
+        sourceText: SOURCE,
+      })
+    );
+    expect(
+      log.runs[0].results[0].locations[0].physicalLocation.region
+    ).toBeUndefined();
+    expect(
+      log.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri
+    ).toBe("./mcp.json");
+  });
+
+  it("omits regions entirely without sourceText (previous behavior)", () => {
+    const log = parseSarif(
+      formatSarif(regionReport("beta"), { configPath: "./mcp.json" })
+    );
+    expect(
+      log.runs[0].results[0].locations[0].physicalLocation.region
+    ).toBeUndefined();
+  });
+});
+
 describe("scan --format sarif cli", () => {
   function scanSarif(extra: string[] = []): { code: number; log: any } {
     try {
@@ -123,6 +255,50 @@ describe("scan --format sarif cli", () => {
       log.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri
     ).toContain("vulnerable.mcp.json");
     expect(log.runs[0].tool.driver.version).toBe("0.2.0");
+  });
+
+  it("points results at the offending server's entry lines for a pretty config", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-sarif-"));
+    const config = join(dir, "mcp.json");
+    writeFileSync(
+      config,
+      [
+        "{",
+        '  "mcpServers": {',
+        '    "alpha": {',
+        '      "command": "npx",',
+        '      "args": ["-y", "beta"]',
+        "    },",
+        '    "beta": {',
+        '      "url": "http://0.0.0.0:8080/mcp",',
+        '      "headers": {}',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n")
+    );
+    try {
+      execFileSync(
+        "node",
+        [cli, "scan", "--config", config, "--no-network", "--format", "sarif"],
+        { encoding: "utf-8" }
+      );
+      expect.unreachable("beta's plaintext findings should exit 1");
+    } catch (err: any) {
+      expect(err.status).toBe(1);
+      const log = parseSarif(String(err.stdout ?? ""));
+      expect(log.runs[0].results.length).toBeGreaterThan(0);
+      // At least one finding anchors on beta's entry (lines 7-10).
+      const betaRegions = log.runs[0].results
+        .map((r: any) => r.locations[0].physicalLocation.region)
+        .filter(Boolean);
+      expect(betaRegions).toContainEqual({
+        startLine: 7,
+        startColumn: 5,
+        endLine: 10,
+      });
+    }
   });
 
   it("rejects an unknown --format with exit 2", () => {
