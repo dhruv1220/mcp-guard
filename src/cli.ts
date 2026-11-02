@@ -345,8 +345,23 @@ async function main(): Promise<void> {
 
   const report = await runChecks(servers, { offline: args.noNetwork });
   if (args.format === "json") console.log(formatJson(report));
-  else if (args.format === "sarif")
-    console.log(formatSarif(report, { configPath: args.config, toolVersion: version() }));
+  else if (args.format === "sarif") {
+    // The config already parsed above, so this read is expected to succeed;
+    // if it somehow fails, SARIF falls back to file-only locations.
+    let sourceText: string | undefined;
+    try {
+      sourceText = readFileSync(args.config, "utf-8");
+    } catch {
+      sourceText = undefined;
+    }
+    console.log(
+      formatSarif(report, {
+        configPath: args.config,
+        toolVersion: version(),
+        sourceText,
+      })
+    );
+  }
   else console.log(formatTable(report));
   process.exit(breachesThreshold(report, args.failOn) ? 1 : 0);
 }
