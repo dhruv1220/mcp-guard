@@ -3,7 +3,9 @@
  *
  * Lets CI pipelines upload findings to GitHub code scanning (or any SARIF
  * consumer) with `github/codeql-action/upload-sarif`. Each result points
- * at its server's entry in the scanned config file (see
+ * at the offending field inside its server's entry when the finding's
+ * evidence identifies one (see `locateServerFields` and
+ * `fieldPathForFinding`); otherwise it points at the server's entry (see
  * `locateServerEntries`); when the source text is unavailable or an entry
  * cannot be located, the result falls back to pointing at the file with
  * no region.
@@ -29,8 +31,9 @@ export interface SarifOptions {
   toolVersion?: string;
   /**
    * Raw text of the scanned config. When supplied, each result gains a
-   * region covering its server's entry (see `locateServerEntries`).
-   * Only server names and line/column numbers are derived from it —
+   * region covering its offending field, or its server's entry when no
+   * field is identified (see `locateServerFields`).
+   * Only server/field names and line/column numbers are derived from it —
    * no values, and therefore no secrets, ever reach the output.
    */
   sourceText?: string;
@@ -71,15 +74,38 @@ function toRule(check: { id: string; title: string }): SarifRule {
   };
 }
 
+/**
+ * The config field a finding's evidence points at, as a dotted path
+ * inside the server entry (e.g. `env.GITHUB_TOKEN`, `url`, `args`).
+ * Derived only from the evidence prefix, which the checks already emit
+ * in redacted form — no secret value is ever read, only the field name
+ * (which the SARIF message already contains via the evidence text).
+ * Returns undefined when the evidence identifies no single field; the
+ * caller then falls back to the whole server entry.
+ */
+export function fieldPathForFinding(f: Finding): string | undefined {
+  const secret = /^(env|headers)\.(.+?) = /.exec(f.evidence);
+  if (secret) return `${secret[1]}.${secret[2]}`;
+  if (f.evidence.startsWith("url: ")) return "url";
+  if (f.evidence.startsWith("command: ")) return "command";
+  if (f.evidence.startsWith("args: ")) return "args";
+  if (f.evidence.startsWith("package: ")) return "args";
+  return undefined;
+}
+
 function toResult(
   f: Finding,
   configPath: string,
-  locations: Map<string, ServerLocation>
+  locations: Map<string, ServerLocation>,
+  fieldLocations: Map<string, Map<string, ServerLocation>> = new Map()
 ): SarifResult {
   const parts = [f.message];
   if (f.evidence) parts.push(`Evidence: ${f.evidence}`);
   if (f.remediation) parts.push(`Remediation: ${f.remediation}`);
-  const location = locations.get(f.server);
+  const fieldPath = fieldPathForFinding(f);
+  const location =
+    (fieldPath ? fieldLocations.get(f.server)?.get(fieldPath) : undefined) ??
+    locations.get(f.server);
   return {
     ruleId: f.checkId,
     level: LEVEL[f.severity],
@@ -115,27 +141,91 @@ function toResult(
  * keys resolve last-wins, matching `JSON.parse`. Malformed JSON yields
  * an empty map, so callers fall back to file-only locations.
  */
+/** One server entry plus every nested field inside it, by dotted path. */
+interface ServerFields {
+  name: string;
+  location: ServerLocation;
+  fields: Map<string, ServerLocation>;
+}
+
+/** Collect every nested key inside an object, as dotted paths. */
+function collectFields(
+  obj: ParsedObject,
+  prefix: string,
+  out: Map<string, ServerLocation>
+): void {
+  for (const entry of obj.entries) {
+    const path = prefix ? `${prefix}.${entry.key}` : entry.key;
+    out.set(path, {
+      startLine: entry.keyLine,
+      startColumn: entry.keyColumn,
+      endLine: entry.value.endLine,
+    });
+    if (entry.value.object) collectFields(entry.value.object, path, out);
+  }
+}
+
+/**
+ * Parse the server entries out of a config's raw text (the `mcpServers`
+ * wrapper, or the bare top-level map when there is no wrapper — mirroring
+ * `loadConfig`). Returns null for malformed JSON or a non-object top
+ * level; callers treat that as "nothing locatable".
+ */
+function parseServers(source: string): ServerFields[] | null {
+  try {
+    const top = new JsonParser(source).parseTop();
+    if (!top.object) return null;
+    let serverEntries = top.object.entries;
+    const serversEntry = top.object.entries.find(
+      (e) => e.key === "mcpServers"
+    );
+    if (serversEntry?.value.object)
+      serverEntries = serversEntry.value.object.entries;
+    return serverEntries.map((entry) => {
+      const fields = new Map<string, ServerLocation>();
+      if (entry.value.object) collectFields(entry.value.object, "", fields);
+      return {
+        name: entry.key,
+        location: {
+          startLine: entry.keyLine,
+          startColumn: entry.keyColumn,
+          endLine: entry.value.endLine,
+        },
+        fields,
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function locateServerEntries(
   source: string
 ): Map<string, ServerLocation> {
-  try {
-    const top = new JsonParser(source).parseTop();
-    if (!top.object) return new Map();
-    let serverEntries = top.object.entries;
-    const serversEntry = top.object.entries.find((e) => e.key === "mcpServers");
-    if (serversEntry?.value.object) serverEntries = serversEntry.value.object.entries;
-    const locations = new Map<string, ServerLocation>();
-    for (const entry of serverEntries) {
-      locations.set(entry.key, {
-        startLine: entry.keyLine,
-        startColumn: entry.keyColumn,
-        endLine: entry.value.endLine,
-      });
-    }
-    return locations;
-  } catch {
-    return new Map();
-  }
+  const servers = parseServers(source);
+  if (!servers) return new Map();
+  const locations = new Map<string, ServerLocation>();
+  for (const server of servers) locations.set(server.name, server.location);
+  return locations;
+}
+
+/**
+ * Map each server name to its nested fields, by dotted path inside the
+ * server entry: top-level fields (`url`, `command`, `args`) and nested
+ * ones (`env.GITHUB_TOKEN`, `headers.Authorization`). A field's region
+ * runs from its key line through its value's end line, so a scalar field
+ * is one line and an object field spans its braces. Only key names and
+ * line/column numbers are recorded — never values, so no secret can
+ * leak through regions. Malformed JSON yields an empty map.
+ */
+export function locateServerFields(
+  source: string
+): Map<string, Map<string, ServerLocation>> {
+  const servers = parseServers(source);
+  if (!servers) return new Map();
+  const fields = new Map<string, Map<string, ServerLocation>>();
+  for (const server of servers) fields.set(server.name, server.fields);
+  return fields;
 }
 
 interface ParsedEntry {
@@ -310,6 +400,10 @@ export function formatSarif(report: ScanReport, opts: SarifOptions = {}): string
     opts.sourceText !== undefined
       ? locateServerEntries(opts.sourceText)
       : new Map<string, ServerLocation>();
+  const fieldLocations =
+    opts.sourceText !== undefined
+      ? locateServerFields(opts.sourceText)
+      : new Map<string, Map<string, ServerLocation>>();
   const log = {
     $schema: SARIF_SCHEMA,
     version: SARIF_VERSION,
@@ -326,7 +420,9 @@ export function formatSarif(report: ScanReport, opts: SarifOptions = {}): string
         artifacts: configPath
           ? [{ location: { uri: configPath } }]
           : [],
-        results: report.findings.map((f) => toResult(f, configPath, locations)),
+        results: report.findings.map((f) =>
+          toResult(f, configPath, locations, fieldLocations)
+        ),
       },
     ],
   };

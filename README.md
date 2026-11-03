@@ -27,10 +27,14 @@ mcpguard scan --config ./mcp.json --format sarif --fail-on high > results.sarif
 # then upload results.sarif with your SARIF uploader (e.g. github/codeql-action/upload-sarif)
 ```
 
-Each SARIF result points at its server's entry in the config file (key line
-through the entry's closing brace), so code scanning anchors the finding on
-the offending server instead of at the top of the file. Findings for a
-server entry that can't be located fall back to the file with no region.
+Each SARIF result points at the offending field inside its server's entry
+when the finding identifies one — a hardcoded secret anchors on its
+`env.<KEY>` line, a plaintext URL on its `url` line — so code scanning
+anchors the finding on the exact line to fix instead of the whole server
+entry. Findings with no identifiable field point at the server's entry
+(key line through the entry's closing brace), and entries that can't be
+located fall back to the file with no region. Only key names and
+line/column numbers are used for regions, never values.
 
 ## Gateway (v0.2)
 
