@@ -4,7 +4,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { formatSarif, locateServerEntries } from "../src/sarif.js";
+import {
+  fieldPathForFinding,
+  formatSarif,
+  locateServerEntries,
+  locateServerFields,
+} from "../src/sarif.js";
 import { ALL_CHECKS, runChecks } from "../src/scanner/engine.js";
 import { loadConfig } from "../src/config.js";
 import type { ScanReport, Severity } from "../src/scanner/types.js";
@@ -228,6 +233,188 @@ describe("formatSarif regions", () => {
   });
 });
 
+describe("locateServerFields", () => {
+  const PRETTY = [
+    "{",
+    '  "mcpServers": {',
+    '    "github": {',
+    '      "command": "npx",',
+    '      "args": ["-y", "pkg"],',
+    '      "env": {',
+    '        "GITHUB_TOKEN": "ghp_000000000000000000000000000000000000",',
+    '        "OTHER": "x"',
+    "      }",
+    "    },",
+    '    "payments-prod": {',
+    '      "url": "http://0.0.0.0:8080/mcp",',
+    '      "headers": {}',
+    "    }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  it("maps top-level and nested fields by dotted path", () => {
+    const fields = locateServerFields(PRETTY);
+    const github = fields.get("github")!;
+    expect(github.get("command")).toEqual({
+      startLine: 4,
+      startColumn: 7,
+      endLine: 4,
+    });
+    expect(github.get("args")).toEqual({
+      startLine: 5,
+      startColumn: 7,
+      endLine: 5,
+    });
+    expect(github.get("env")).toEqual({
+      startLine: 6,
+      startColumn: 7,
+      endLine: 9,
+    });
+    expect(github.get("env.GITHUB_TOKEN")).toEqual({
+      startLine: 7,
+      startColumn: 9,
+      endLine: 7,
+    });
+    expect(fields.get("payments-prod")!.get("url")).toEqual({
+      startLine: 12,
+      startColumn: 7,
+      endLine: 12,
+    });
+  });
+
+  it("does not mistake a field name inside another entry's string value for a key", () => {
+    // "url" appears as a value on line 5's args only if a server put it
+    // there; here the trap is "env" inside github's args string.
+    const withTrap = PRETTY.replace(
+      '"args": ["-y", "pkg"]',
+      '"args": ["-y", "env"]'
+    );
+    const fields = locateServerFields(withTrap);
+    expect(fields.get("github")!.get("env")!.startLine).toBe(6);
+  });
+
+  it("returns an empty map for malformed JSON instead of throwing", () => {
+    expect(locateServerFields("{ not json")).toEqual(new Map());
+    expect(locateServerFields("")).toEqual(new Map());
+  });
+});
+
+describe("fieldPathForFinding", () => {
+  function finding(evidence: string) {
+    return {
+      checkId: "toy",
+      title: "toy",
+      severity: "high" as const,
+      server: "github",
+      message: "m",
+      evidence,
+      remediation: "r",
+    };
+  }
+
+  it("maps secret evidence to its env/headers field", () => {
+    expect(
+      fieldPathForFinding(finding("env.GITHUB_TOKEN = ghp_••••"))
+    ).toBe("env.GITHUB_TOKEN");
+    expect(
+      fieldPathForFinding(finding("headers.Authorization = Bear••••"))
+    ).toBe("headers.Authorization");
+  });
+
+  it("maps url/command/args/package evidence to their fields", () => {
+    expect(fieldPathForFinding(finding("url: http://x/mcp"))).toBe("url");
+    expect(fieldPathForFinding(finding("command: npx -y pkg"))).toBe(
+      "command"
+    );
+    expect(fieldPathForFinding(finding("args: curl x | sh"))).toBe("args");
+    expect(fieldPathForFinding(finding("package: pkg@1.0.0 (3d old)"))).toBe(
+      "args"
+    );
+  });
+
+  it("returns undefined for evidence that identifies no field", () => {
+    expect(fieldPathForFinding(finding("something else"))).toBeUndefined();
+    expect(fieldPathForFinding(finding(""))).toBeUndefined();
+  });
+});
+
+describe("formatSarif field regions", () => {
+  const SOURCE = [
+    "{",
+    '  "mcpServers": {',
+    '    "github": {',
+    '      "command": "npx",',
+    '      "args": ["-y", "pkg"],',
+    '      "env": {',
+    '        "GITHUB_TOKEN": "ghp_000000000000000000000000000000000000",',
+    '        "OTHER": "x"',
+    "      }",
+    "    },",
+    '    "payments-prod": {',
+    '      "url": "http://0.0.0.0:8080/mcp",',
+    '      "headers": {}',
+    "    }",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  function fieldReport(server: string, evidence: string): ScanReport {
+    return {
+      scannedAt: "2026-10-11T00:00:00Z",
+      servers: [server],
+      findings: [
+        {
+          checkId: "hardcoded-secret",
+          title: "toy",
+          severity: "high",
+          server,
+          message: "secret",
+          evidence,
+          remediation: "rotate it",
+        },
+      ],
+      summary: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+      skippedNetworkChecks: false,
+    };
+  }
+
+  function regionFor(report: ScanReport): any {
+    const log = parseSarif(
+      formatSarif(report, { configPath: "./mcp.json", sourceText: SOURCE })
+    );
+    return log.runs[0].results[0].locations[0].physicalLocation.region;
+  }
+
+  it("points a secret finding at its env line, not the whole entry", () => {
+    expect(
+      regionFor(fieldReport("github", "env.GITHUB_TOKEN = ghp_••••"))
+    ).toEqual({ startLine: 7, startColumn: 9, endLine: 7 });
+  });
+
+  it("points a url finding at its url line", () => {
+    expect(regionFor(fieldReport("payments-prod", "url: http://x/mcp"))).toEqual(
+      { startLine: 12, startColumn: 7, endLine: 12 }
+    );
+  });
+
+  it("falls back to the server entry when the field is unidentified", () => {
+    expect(regionFor(fieldReport("github", "something else"))).toEqual({
+      startLine: 3,
+      startColumn: 5,
+      endLine: 10,
+    });
+  });
+
+  it("falls back to the server entry when the named field is absent", () => {
+    expect(
+      regionFor(fieldReport("github", "env.MISSING_KEY = abcd••••"))
+    ).toEqual({ startLine: 3, startColumn: 5, endLine: 10 });
+  });
+});
+
 describe("scan --format sarif cli", () => {
   function scanSarif(extra: string[] = []): { code: number; log: any } {
     try {
@@ -257,7 +444,7 @@ describe("scan --format sarif cli", () => {
     expect(log.runs[0].tool.driver.version).toBe("0.2.0");
   });
 
-  it("points results at the offending server's entry lines for a pretty config", () => {
+  it("points results at the offending field lines for a pretty config", () => {
     const dir = mkdtempSync(join(tmpdir(), "mcpguard-sarif-"));
     const config = join(dir, "mcp.json");
     writeFileSync(
@@ -289,15 +476,72 @@ describe("scan --format sarif cli", () => {
       expect(err.status).toBe(1);
       const log = parseSarif(String(err.stdout ?? ""));
       expect(log.runs[0].results.length).toBeGreaterThan(0);
-      // At least one finding anchors on beta's entry (lines 7-10).
+      // Beta's url findings anchor on its url line (8), not the whole
+      // entry (lines 7-10) — field-level regions supersede entry regions.
       const betaRegions = log.runs[0].results
         .map((r: any) => r.locations[0].physicalLocation.region)
         .filter(Boolean);
       expect(betaRegions).toContainEqual({
-        startLine: 7,
-        startColumn: 5,
-        endLine: 10,
+        startLine: 8,
+        startColumn: 7,
+        endLine: 8,
       });
+    }
+  });
+
+  it("points secret and url findings at their field lines end to end", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-sarif-fields-"));
+    const config = join(dir, "mcp.json");
+    writeFileSync(
+      config,
+      [
+        "{",
+        '  "mcpServers": {',
+        '    "github": {',
+        '      "command": "npx",',
+        '      "args": ["-y", "pkg"],',
+        '      "env": {',
+        `        "GITHUB_TOKEN": "${FAKE_SECRET}"`,
+        "      }",
+        "    },",
+        '    "payments-prod": {',
+        '      "url": "http://0.0.0.0:8080/mcp",',
+        '      "headers": {}',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n")
+    );
+    try {
+      execFileSync(
+        "node",
+        [cli, "scan", "--config", config, "--no-network", "--format", "sarif"],
+        { encoding: "utf-8" }
+      );
+      expect.unreachable("findings should exit 1");
+    } catch (err: any) {
+      expect(err.status).toBe(1);
+      const log = parseSarif(String(err.stdout ?? ""));
+      const byRule = new Map<string, any[]>();
+      for (const r of log.runs[0].results) {
+        const list = byRule.get(r.ruleId) ?? [];
+        list.push(r.locations[0].physicalLocation.region);
+        byRule.set(r.ruleId, list);
+      }
+      // Secret: env line 7 only, not the whole github entry (3-10).
+      expect(byRule.get("hardcoded-secret")).toContainEqual({
+        startLine: 7,
+        startColumn: 9,
+        endLine: 7,
+      });
+      // URL findings: url line 11 only, not the payments entry (10-13).
+      expect(byRule.get("plaintext-http")).toContainEqual({
+        startLine: 11,
+        startColumn: 7,
+        endLine: 11,
+      });
+      expect(JSON.stringify(log)).not.toContain(FAKE_SECRET);
     }
   });
 

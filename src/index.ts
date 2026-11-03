@@ -11,7 +11,12 @@ export type {
 export { loadConfig, ConfigError } from "./config.js";
 export { ALL_CHECKS, breachesThreshold, runChecks } from "./scanner/engine.js";
 export { formatJson, formatTable } from "./report.js";
-export { formatSarif, locateServerEntries } from "./sarif.js";
+export {
+  fieldPathForFinding,
+  formatSarif,
+  locateServerEntries,
+  locateServerFields,
+} from "./sarif.js";
 export type { SarifOptions, ServerLocation } from "./sarif.js";
 export {
   decide,
