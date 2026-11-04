@@ -70,6 +70,38 @@ function hostOf(url: string): string {
   }
 }
 
+/**
+ * True when a URL carries credentials in its userinfo
+ * (`https://user:pass@host` or a bare token as username,
+ * `https://token@host`). Either form is a credential: it must be
+ * flagged, never printed.
+ */
+export function urlHasCredentials(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.username !== "" || u.password !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Replace a URL's userinfo with a placeholder, keeping the rest
+ * (scheme, host, port, path, query, fragment) intact so evidence
+ * still shows which server the finding is about. Malformed URLs
+ * pass through unchanged — callers already skip those.
+ */
+export function redactUrlCredentials(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!parsed.username && !parsed.password) return url;
+  return `${parsed.protocol}//•••@${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /* ------------------------------------------------------------------ */
@@ -95,7 +127,9 @@ const noAuthCheck: Check = {
     } catch {
       /* malformed URL is its own problem; don't double-flag */
     }
-    if (hasAuthHeader || hasUrlToken) return [];
+    // Userinfo credentials are auth, of a bad kind — url-credentials
+    // flags them, so no-auth stays silent instead of double-flagging.
+    if (hasAuthHeader || hasUrlToken || urlHasCredentials(server.url)) return [];
     return [
       finding(
         "no-auth",
@@ -103,7 +137,7 @@ const noAuthCheck: Check = {
         "high",
         server.name,
         `Remote MCP server has no Authorization header or URL token — anyone who can reach it can invoke its tools.`,
-        `url: ${server.url}`,
+        `url: ${redactUrlCredentials(server.url)}`,
         "Put the server behind OAuth 2.0/OIDC or add an Authorization header. Never commit bearer tokens in the URL — reference them from the environment."
       ),
     ];
@@ -132,7 +166,7 @@ const plaintextHttpCheck: Check = {
           "info",
           server.name,
           "Server uses plaintext HTTP, but only on loopback — low risk on a trusted machine.",
-          `url: ${server.url}`,
+          `url: ${redactUrlCredentials(server.url)}`,
           "Prefer https:// or a Unix socket even for local servers when the machine is shared."
         ),
       ];
@@ -144,7 +178,7 @@ const plaintextHttpCheck: Check = {
         "high",
         server.name,
         "Server URL uses http:// — tool calls, results, and any credentials travel unencrypted.",
-        `url: ${server.url}`,
+        `url: ${redactUrlCredentials(server.url)}`,
         "Serve the MCP endpoint over https:// (or tunnel it). Rotate any credential that already traversed plaintext."
       ),
     ];
@@ -165,8 +199,29 @@ const wildcardBindCheck: Check = {
         "medium",
         server.name,
         "Server URL binds 0.0.0.0 — the MCP endpoint is exposed to the whole local network, not just this machine (the 'NeighborJack' pattern).",
-        `url: ${server.url}`,
+        `url: ${redactUrlCredentials(server.url)}`,
         "Bind to 127.0.0.1 unless remote access is intentional, and require authentication either way."
+      ),
+    ];
+  },
+};
+
+const urlCredentialsCheck: Check = {
+  id: "url-credentials",
+  title: "Credentials embedded in server URL",
+  async: false,
+  run(server) {
+    if (server.transport === "stdio" || !server.url) return [];
+    if (!urlHasCredentials(server.url)) return [];
+    return [
+      finding(
+        "url-credentials",
+        "Credentials embedded in server URL",
+        "high",
+        server.name,
+        "Server URL embeds credentials in its userinfo — URLs land in logs, shell history, screen shares, and error reports, so the credential leaks far beyond this config file.",
+        `url: ${redactUrlCredentials(server.url)}`,
+        "Move the credential to an Authorization header (referenced from the environment, never committed) and rotate the exposed credential."
       ),
     ];
   },
@@ -405,6 +460,7 @@ export const ALL_CHECKS: Check[] = [
   noAuthCheck,
   plaintextHttpCheck,
   wildcardBindCheck,
+  urlCredentialsCheck,
   hardcodedSecretCheck,
   riskyStdioCommandCheck,
   npmSupplyChainCheck,

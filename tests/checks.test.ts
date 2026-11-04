@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_CHECKS,
   redactSecret,
+  redactUrlCredentials,
+  urlHasCredentials,
   looksLikePlaceholder,
   stripVersion,
 } from "../src/scanner/checks.js";
+import { runChecks } from "../src/scanner/engine.js";
 import type { CheckContext, McpServerDef } from "../src/scanner/types.js";
 
 const CTX: CheckContext = { offline: true };
@@ -96,6 +99,78 @@ describe("wildcard-bind", () => {
     )) as any[];
     expect(findings).toHaveLength(1);
     expect(findings[0].severity).toBe("medium");
+  });
+});
+
+describe("urlHasCredentials / redactUrlCredentials", () => {
+  it("detects user:password and bare-token userinfo", () => {
+    expect(urlHasCredentials("https://user:pass@example.com/mcp")).toBe(true);
+    expect(urlHasCredentials("https://sometoken123@example.com/mcp")).toBe(true);
+    expect(urlHasCredentials("https://example.com/mcp")).toBe(false);
+    expect(urlHasCredentials("not a url")).toBe(false);
+  });
+  it("replaces userinfo with a placeholder, keeping host and path", () => {
+    expect(redactUrlCredentials("https://user:s3cret@example.com:8443/mcp?q=1")).toBe(
+      "https://•••@example.com:8443/mcp?q=1"
+    );
+    expect(redactUrlCredentials("https://token123@example.com/mcp")).toBe(
+      "https://•••@example.com/mcp"
+    );
+  });
+  it("leaves clean and malformed URLs unchanged", () => {
+    expect(redactUrlCredentials("https://example.com/mcp")).toBe(
+      "https://example.com/mcp"
+    );
+    expect(redactUrlCredentials("not a url")).toBe("not a url");
+  });
+});
+
+describe("url-credentials", () => {
+  const CRED_URL = "https://user:s3cretpass@example.com/mcp";
+  it("flags userinfo credentials as high with redacted evidence", async () => {
+    const findings = (await run("url-credentials", remote({ url: CRED_URL }))) as any[];
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("high");
+    expect(findings[0].evidence).toBe("url: https://•••@example.com/mcp");
+    expect(JSON.stringify(findings[0])).not.toContain("s3cretpass");
+  });
+  it("flags a bare token used as the username", async () => {
+    const findings = (await run(
+      "url-credentials",
+      remote({ url: "https://tok123456789@example.com/mcp" })
+    )) as any[];
+    expect(findings).toHaveLength(1);
+    expect(JSON.stringify(findings[0])).not.toContain("tok123456789");
+  });
+  it("passes clean URLs and ignores stdio servers", async () => {
+    expect((await run("url-credentials", remote())) as any[]).toHaveLength(0);
+    expect((await run("url-credentials", stdio())) as any[]).toHaveLength(0);
+  });
+  it("suppresses the misleading no-auth finding for userinfo URLs", async () => {
+    expect((await run("no-auth", remote({ url: CRED_URL }))) as any[]).toHaveLength(0);
+  });
+  it("redacts userinfo from other URL evidence", async () => {
+    const plain = (await run(
+      "plaintext-http",
+      remote({ url: "http://user:s3cretpass@example.com/mcp" })
+    )) as any[];
+    expect(plain).toHaveLength(1);
+    expect(plain[0].evidence).toBe("url: http://•••@example.com/mcp");
+    expect(JSON.stringify(plain[0])).not.toContain("s3cretpass");
+    const wild = (await run(
+      "wildcard-bind",
+      remote({ url: "http://user:s3cretpass@0.0.0.0:8080/mcp" })
+    )) as any[];
+    expect(wild).toHaveLength(1);
+    expect(JSON.stringify(wild[0])).not.toContain("s3cretpass");
+  });
+  it("never leaks the credential anywhere in a full offline scan", async () => {
+    const report = await runChecks(
+      [remote({ url: "http://user:s3cretpass@example.com/mcp" })],
+      { offline: true }
+    );
+    expect(report.findings.map((f) => f.checkId)).toContain("url-credentials");
+    expect(JSON.stringify(report)).not.toContain("s3cretpass");
   });
 });
 
