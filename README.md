@@ -160,6 +160,7 @@ not what should happen.
 | `no-auth` | high | Remote (HTTP/SSE) server with no `Authorization` header or token |
 | `plaintext-http` | high | Remote URL over `http://` instead of `https://` |
 | `wildcard-bind` | medium | Server URL bound to `0.0.0.0` (exposed to the local network) |
+| `url-credentials` | high | Credentials embedded in the server URL's userinfo (redacted in all output) |
 | `hardcoded-secret` | high | API keys / tokens committed in `env` or headers (redacted in output) |
 | `risky-stdio-command` | critical–medium | `curl … \| sh`, `sudo`, encoded PowerShell, unpinned `npx -y` auto-install |
 | `npm-supply-chain` | medium | `npx`/`uvx` package missing from npm or published < 90 days ago |
