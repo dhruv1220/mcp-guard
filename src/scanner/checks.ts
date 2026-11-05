@@ -86,9 +86,43 @@ export function urlHasCredentials(url: string): boolean {
 }
 
 /**
+ * Query-string parameter names that carry credentials. A token in the
+ * query string is auth of the worst kind: URLs land in access logs,
+ * proxies, error reports, and shell history, and the value is visible
+ * to every hop — unlike a header, which stays out of the URL.
+ */
+const CREDENTIAL_QUERY_PARAMS = new Set([
+  "access_token",
+  "api_key",
+  "apikey",
+  "token",
+  "secret",
+]);
+
+/**
+ * The credential-bearing query parameters present in a URL
+ * (lowercased names, deduplicated). Malformed URLs have none.
+ */
+export function urlQueryCredentials(url: string): string[] {
+  try {
+    const u = new URL(url);
+    const found = new Set<string>();
+    for (const k of u.searchParams.keys()) {
+      if (CREDENTIAL_QUERY_PARAMS.has(k.toLowerCase())) found.add(k.toLowerCase());
+    }
+    return [...found];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Replace a URL's userinfo with a placeholder, keeping the rest
  * (scheme, host, port, path, query, fragment) intact so evidence
- * still shows which server the finding is about. Malformed URLs
+ * still shows which server the finding is about. Credential-bearing
+ * query parameters have their values replaced the same way — a
+ * `?api_key=` value is a secret and must never reach scan output —
+ * while benign parameters are left byte-identical. Malformed URLs
  * pass through unchanged — callers already skip those.
  */
 export function redactUrlCredentials(url: string): string {
@@ -98,8 +132,34 @@ export function redactUrlCredentials(url: string): string {
   } catch {
     return url;
   }
-  if (!parsed.username && !parsed.password) return url;
-  return `${parsed.protocol}//•••@${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  const hasUserinfo = parsed.username !== "" || parsed.password !== "";
+  const queryCreds = urlQueryCredentials(url);
+  if (!hasUserinfo && queryCreds.length === 0) return url;
+  // Redact by string surgery on the raw query, not via URLSearchParams:
+  // re-serializing would percent-encode the placeholder and mangle
+  // benign parameters. The leading "?" stays attached to the first part.
+  const search = parsed.search
+    .split("&")
+    .map((part) => {
+      const eq = part.indexOf("=");
+      if (eq === -1) return part;
+      // The leading "?" rides along on the first part; strip it for
+      // the key comparison but keep it in the rebuilt output.
+      const rawKey = part.slice(0, eq);
+      const key = rawKey.startsWith("?") ? rawKey.slice(1) : rawKey;
+      let decoded = key;
+      try {
+        decoded = decodeURIComponent(key);
+      } catch {
+        /* keep the raw key on undecodable input */
+      }
+      if (CREDENTIAL_QUERY_PARAMS.has(decoded.toLowerCase())) {
+        return `${part.slice(0, eq + 1)}•••`;
+      }
+      return part;
+    })
+    .join("&");
+  return `${parsed.protocol}//${hasUserinfo ? "•••@" : ""}${parsed.host}${parsed.pathname}${search}${parsed.hash}`;
 }
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -118,15 +178,11 @@ const noAuthCheck: Check = {
     const hasAuthHeader = Object.keys(headers).some(
       (k) => k.toLowerCase() === "authorization"
     );
-    let hasUrlToken = false;
-    try {
-      const u = new URL(server.url);
-      hasUrlToken = ["access_token", "api_key", "apikey", "token"].some((p) =>
-        u.searchParams.has(p)
-      );
-    } catch {
-      /* malformed URL is its own problem; don't double-flag */
-    }
+    // A credential in the query string is auth, of a bad kind —
+    // url-query-credentials flags it, so no-auth stays silent instead
+    // of double-flagging. (urlQueryCredentials is safe on malformed
+    // URLs: it returns [] rather than throwing.)
+    const hasUrlToken = urlQueryCredentials(server.url).length > 0;
     // Userinfo credentials are auth, of a bad kind — url-credentials
     // flags them, so no-auth stays silent instead of double-flagging.
     if (hasAuthHeader || hasUrlToken || urlHasCredentials(server.url)) return [];
@@ -227,6 +283,28 @@ const urlCredentialsCheck: Check = {
   },
 };
 
+const urlQueryCredentialsCheck: Check = {
+  id: "url-query-credentials",
+  title: "Credentials in server URL query string",
+  async: false,
+  run(server) {
+    if (server.transport === "stdio" || !server.url) return [];
+    const params = urlQueryCredentials(server.url);
+    if (params.length === 0) return [];
+    return [
+      finding(
+        "url-query-credentials",
+        "Credentials in server URL query string",
+        "high",
+        server.name,
+        `Server URL carries a credential in its query string (?${params.join(", ?")}=…) — query strings are logged by servers, proxies, and error reporters, so the credential leaks to every hop. Treat it as exposed and rotate it.`,
+        `url: ${redactUrlCredentials(server.url)}`,
+        "Move the credential to an Authorization header (referenced from the environment, never committed) and rotate the exposed credential."
+      ),
+    ];
+  },
+};
+
 /* ------------------------------------------------------------------ */
 /* secret checks                                                       */
 /* ------------------------------------------------------------------ */
@@ -274,6 +352,53 @@ const hardcodedSecretCheck: Check = {
           );
         }
       }
+    }
+    // stdio arguments: argv is a third credential channel, after env
+    // and headers. A token passed as `--api-key <value>` or
+    // `--token=<value>` shows up in process listings (`ps`), shell
+    // history, and process managers — and in this config file itself.
+    // The whole argument is redacted in evidence, never just the
+    // matched substring, so `--flag=<secret>` forms leak nothing.
+    if (server.args && server.args.length > 0) {
+      server.args.forEach((raw, i) => {
+        const value = String(raw);
+        if (looksLikePlaceholder(value)) return;
+        const label = findSecret(value);
+        if (label) {
+          out.push(
+            finding(
+              "hardcoded-secret",
+              "Hardcoded secret in config",
+              "high",
+              server.name,
+              `${label} passed as a stdio argument — anyone who can list processes or read this config gets the credential.`,
+              `args[${i}] = ${redactSecret(value)}`,
+              "Move the value to an environment variable (${VAR} is left alone by this check) or a secret manager, and rotate the exposed credential."
+            )
+          );
+          return;
+        }
+        // Long value handed to a sensitive flag (`--api-key <value>`):
+        // no known pattern, but a 20+ character opaque value after a
+        // credential-named flag is secret-shaped. Skip values that are
+        // themselves flags.
+        if (i > 0 && !value.startsWith("-") && value.length >= 20) {
+          const prev = String(server.args![i - 1]).replace(/^-+/, "");
+          if (SENSITIVE_KEY_RE.test(prev)) {
+            out.push(
+              finding(
+                "hardcoded-secret",
+                "Hardcoded secret in config",
+                "high",
+                server.name,
+                `Suspiciously secret-shaped value passed to --${prev} (long, high-entropy, sensitive flag name).`,
+                `args[${i}] = ${redactSecret(value)}`,
+                "If this is a real credential, move it to the environment and rotate it. If not, rename the flag to avoid the tripwire."
+              )
+            );
+          }
+        }
+      });
     }
     return out;
   },
@@ -461,6 +586,7 @@ export const ALL_CHECKS: Check[] = [
   plaintextHttpCheck,
   wildcardBindCheck,
   urlCredentialsCheck,
+  urlQueryCredentialsCheck,
   hardcodedSecretCheck,
   riskyStdioCommandCheck,
   npmSupplyChainCheck,
