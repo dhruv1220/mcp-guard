@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ALL_CHECKS,
   redactSecret,
@@ -346,5 +346,84 @@ describe("risky-stdio-command", () => {
   });
   it("ignores remote servers", async () => {
     expect((await run("risky-stdio-command", remote())) as any[]).toHaveLength(0);
+  });
+});
+
+describe("npm-supply-chain", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function packument(over: Record<string, unknown> = {}) {
+    return {
+      "dist-tags": { latest: "2.88.2" },
+      time: { created: "2011-01-22T00:36:12.640Z" },
+      versions: {
+        "2.88.2": { deprecated: "request has been deprecated" },
+      },
+      ...over,
+    };
+  }
+
+  function stubFetch(json: unknown, status = 200) {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        ({
+          status,
+          ok: status >= 200 && status < 300,
+          json: async () => json,
+        }) as Response
+    );
+  }
+
+  async function runOnline(server: McpServerDef) {
+    const check = ALL_CHECKS.find((c) => c.id === "npm-supply-chain")!;
+    return await check.run(server, { offline: false });
+  }
+
+  const npx = (pkg: string) =>
+    stdio({ command: "npx", args: ["-y", pkg] });
+
+  it("flags a deprecated latest version as medium", async () => {
+    stubFetch(packument());
+    const findings = (await runOnline(npx("request@2.88.2"))) as any[];
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("medium");
+    expect(findings[0].evidence).toBe("package: request@2.88.2 (deprecated)");
+    expect(findings[0].message).toContain("request has been deprecated");
+  });
+
+  it("passes a maintained old package", async () => {
+    stubFetch(
+      packument({ versions: { "2.88.2": {} } })
+    );
+    expect((await runOnline(npx("request@2.88.2"))) as any[]).toHaveLength(0);
+  });
+
+  it("does not flag when only an old version is deprecated", async () => {
+    stubFetch(
+      packument({
+        "dist-tags": { latest: "2.0.0" },
+        versions: {
+          "1.0.0": { deprecated: "old version, do not use" },
+          "2.0.0": {},
+        },
+      })
+    );
+    expect((await runOnline(npx("request@2.0.0"))) as any[]).toHaveLength(0);
+  });
+
+  it("flags a young package as before when latest is not deprecated", async () => {
+    stubFetch(
+      packument({
+        "dist-tags": { latest: "0.1.0" },
+        time: { created: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString() },
+        versions: { "0.1.0": {} },
+      })
+    );
+    const findings = (await runOnline(npx("fresh-pkg@0.1.0"))) as any[];
+    expect(findings).toHaveLength(1);
+    expect(findings[0].evidence).toContain("(10d old)");
   });
 });
