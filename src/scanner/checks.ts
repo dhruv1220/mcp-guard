@@ -162,6 +162,19 @@ export function redactUrlCredentials(url: string): string {
   return `${parsed.protocol}//${hasUserinfo ? "•••@" : ""}${parsed.host}${parsed.pathname}${search}${parsed.hash}`;
 }
 
+/**
+ * Redact every credentialed URL embedded in free text (e.g. a command
+ * line), reusing `redactUrlCredentials` per match. URLs without
+ * credentials pass through untouched, so plain text and clean URLs
+ * are byte-identical. The match stops at whitespace and quote-like
+ * characters; a trailing `|` glued to a URL (no spaces) is swallowed
+ * into the path by the URL parser, which is harmless for evidence —
+ * the credential is still redacted and the command still readable.
+ */
+export function redactUrlsInText(text: string): string {
+  return text.replace(/https?:\/\/[^\s"'`<>]+/g, (m) => redactUrlCredentials(m));
+}
+
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /* ------------------------------------------------------------------ */
@@ -440,7 +453,12 @@ const riskyStdioCommandCheck: Check = {
   run(server) {
     if (server.transport !== "stdio") return [];
     const out: Finding[] = [];
-    const cmdline = [server.command ?? "", ...(server.args ?? [])].join(" ");
+    // Evidence prints the command line, so any credentialed URL in
+    // the args must be redacted first — a sudo/curl finding must not
+    // exfiltrate the credential it is flagging the command for.
+    const cmdline = redactUrlsInText(
+      [server.command ?? "", ...(server.args ?? [])].join(" ")
+    );
 
     if (PIPE_TO_SHELL_RE.test(cmdline)) {
       out.push(
