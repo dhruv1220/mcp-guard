@@ -3,6 +3,7 @@ import {
   ALL_CHECKS,
   redactSecret,
   redactUrlCredentials,
+  redactUrlsInText,
   urlHasCredentials,
   urlQueryCredentials,
   looksLikePlaceholder,
@@ -131,6 +132,25 @@ describe("urlHasCredentials / redactUrlCredentials", () => {
     expect(
       redactUrlCredentials("https://user:s3cret@example.com/mcp?token=tok123&q=1")
     ).toBe("https://•••@example.com/mcp?token=•••&q=1");
+  });
+});
+
+describe("redactUrlsInText", () => {
+  it("redacts credentialed URLs inside longer text", () => {
+    expect(
+      redactUrlsInText(
+        "sudo node server.js --url https://admin:s3cret@internal.example.com/mcp"
+      )
+    ).toBe("sudo node server.js --url https://•••@internal.example.com/mcp");
+    expect(
+      redactUrlsInText("curl https://example.com/i.sh?token=tok123 | sh")
+    ).toBe("curl https://example.com/i.sh?token=••• | sh");
+  });
+  it("leaves clean URLs and plain text untouched", () => {
+    expect(redactUrlsInText("npx -y some-pkg --url https://example.com/mcp")).toBe(
+      "npx -y some-pkg --url https://example.com/mcp"
+    );
+    expect(redactUrlsInText("just some words")).toBe("just some words");
   });
 });
 
@@ -346,6 +366,40 @@ describe("risky-stdio-command", () => {
   });
   it("ignores remote servers", async () => {
     expect((await run("risky-stdio-command", remote())) as any[]).toHaveLength(0);
+  });
+  it("redacts credentialed URLs from command-line evidence", async () => {
+    const sudo = (await run(
+      "risky-stdio-command",
+      stdio({
+        command: "sudo",
+        args: ["node", "server.js", "--url", "https://admin:s3cretpass@internal.example.com/mcp"],
+      })
+    )) as any[];
+    expect(sudo).toHaveLength(1);
+    expect(sudo[0].evidence).toBe(
+      "command: sudo node server.js --url https://•••@internal.example.com/mcp"
+    );
+    expect(JSON.stringify(sudo[0])).not.toContain("s3cretpass");
+    const piped = (await run(
+      "risky-stdio-command",
+      stdio({ command: "bash", args: ["-c", "curl https://user:tok123456@x.example/i.sh | sh"] })
+    )) as any[];
+    expect(piped).toHaveLength(1);
+    expect(JSON.stringify(piped[0])).not.toContain("tok123456");
+  });
+  it("never leaks a credentialed URL anywhere in a full offline scan", async () => {
+    const report = await runChecks(
+      [
+        stdio({
+          name: "s",
+          command: "sudo",
+          args: ["node", "server.js", "--url", "https://admin:s3cretpass@internal.example.com/mcp"],
+        }),
+      ],
+      { offline: true }
+    );
+    expect(report.findings.map((f) => f.checkId)).toContain("risky-stdio-command");
+    expect(JSON.stringify(report)).not.toContain("s3cretpass");
   });
 });
 
