@@ -164,7 +164,7 @@ not what should happen.
 | `url-query-credentials` | high | Credentials in the server URL's query string (`?api_key=…`, redacted in all output) |
 | `hardcoded-secret` | high | API keys / tokens committed in `env`, headers, or stdio `args` (redacted in output) |
 | `risky-stdio-command` | critical–medium | `curl … \| sh`, `sudo`, encoded PowerShell, unpinned `npx -y` auto-install |
-| `npm-supply-chain` | medium | `npx`/`uvx` package missing from npm or published < 90 days ago |
+| `npm-supply-chain` | medium | `npx`/`uvx` package missing from npm, published < 90 days ago, or deprecated |
 
 ## Development
 

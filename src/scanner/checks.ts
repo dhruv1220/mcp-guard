@@ -513,7 +513,7 @@ export function stripVersion(spec: string): string {
 }
 
 async function npmPackageAge(pkg: string): Promise<
-  | { ok: true; daysOld: number; version: string }
+  | { ok: true; daysOld: number; version: string; deprecated?: string }
   | { ok: false; reason: "not-found" | "network" }
 > {
   try {
@@ -526,11 +526,16 @@ async function npmPackageAge(pkg: string): Promise<
     const meta = (await res.json()) as {
       "dist-tags": { latest: string };
       time: Record<string, string>;
+      versions?: Record<string, { deprecated?: string }>;
     };
     const created = meta.time?.created;
     if (!created) return { ok: false, reason: "network" };
     const daysOld = (Date.now() - new Date(created).getTime()) / (24 * 60 * 60 * 1000);
-    return { ok: true, daysOld, version: meta["dist-tags"]?.latest ?? "unknown" };
+    const version = meta["dist-tags"]?.latest ?? "unknown";
+    // Deprecation lives on the latest version's entry; a deprecated
+    // old version does not flag a package whose latest is clean.
+    const deprecated = meta.versions?.[version]?.deprecated;
+    return { ok: true, daysOld, version, deprecated };
   } catch {
     return { ok: false, reason: "network" };
   }
@@ -561,6 +566,27 @@ const npmSupplyChainCheck: Check = {
         ];
       }
       return []; // offline or registry hiccup — degrade silently
+    }
+    // Deprecation is the stronger signal and subsumes the age check:
+    // a dead, unmaintained package auto-installed on every agent start
+    // is the risk, whatever its age. The registry reason is display
+    // text, not a secret, but it is truncated to keep evidence sane.
+    if (info.deprecated) {
+      const reason =
+        info.deprecated.length > 120
+          ? `${info.deprecated.slice(0, 117)}...`
+          : info.deprecated;
+      return [
+        finding(
+          "npm-supply-chain",
+          "npm supply-chain risk",
+          "medium",
+          server.name,
+          `Package \`${name}\`'s latest version (${info.version}) is deprecated — ${reason}`,
+          `package: ${name}@${info.version} (deprecated)`,
+          "Find a maintained alternative; pin a non-deprecated version only as a stopgap and verify the publisher before first use."
+        ),
+      ];
     }
     if (info.daysOld * 24 * 60 * 60 * 1000 < NINETY_DAYS_MS) {
       return [
