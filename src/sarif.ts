@@ -86,6 +86,7 @@ function toRule(check: { id: string; title: string }): SarifRule {
 export function fieldPathForFinding(f: Finding): string | undefined {
   const secret = /^(env|headers)\.(.+?) = /.exec(f.evidence);
   if (secret) return `${secret[1]}.${secret[2]}`;
+  if (/^args\[\d+\] = /.test(f.evidence)) return "args";
   if (f.evidence.startsWith("url: ")) return "url";
   if (f.evidence.startsWith("command: ")) return "command";
   if (f.evidence.startsWith("args: ")) return "args";

@@ -4,6 +4,7 @@ import {
   redactSecret,
   redactUrlCredentials,
   urlHasCredentials,
+  urlQueryCredentials,
   looksLikePlaceholder,
   stripVersion,
 } from "../src/scanner/checks.js";
@@ -123,6 +124,79 @@ describe("urlHasCredentials / redactUrlCredentials", () => {
     );
     expect(redactUrlCredentials("not a url")).toBe("not a url");
   });
+  it("redacts credential query values, keeping benign params intact", () => {
+    expect(
+      redactUrlCredentials("https://example.com/mcp?api_key=tok123&q=hello&page=2")
+    ).toBe("https://example.com/mcp?api_key=•••&q=hello&page=2");
+    expect(
+      redactUrlCredentials("https://user:s3cret@example.com/mcp?token=tok123&q=1")
+    ).toBe("https://•••@example.com/mcp?token=•••&q=1");
+  });
+});
+
+describe("urlQueryCredentials", () => {
+  it("detects credential-bearing query params, case-insensitively", () => {
+    expect(urlQueryCredentials("https://example.com/mcp?api_key=x")).toEqual([
+      "api_key",
+    ]);
+    expect(urlQueryCredentials("https://example.com/mcp?TOKEN=x&Api_Key=y")).toEqual([
+      "token",
+      "api_key",
+    ]);
+    expect(urlQueryCredentials("https://example.com/mcp?access_token=x")).toEqual([
+      "access_token",
+    ]);
+  });
+  it("ignores benign params and malformed URLs", () => {
+    expect(urlQueryCredentials("https://example.com/mcp?q=hello&page=2")).toEqual([]);
+    expect(urlQueryCredentials("not a url")).toEqual([]);
+  });
+});
+
+describe("url-query-credentials", () => {
+  it("flags a query-string credential as high with redacted evidence", async () => {
+    const findings = (await run(
+      "url-query-credentials",
+      remote({ url: "https://example.com/mcp?api_key=tok1234567890" })
+    )) as any[];
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("high");
+    expect(findings[0].evidence).toBe("url: https://example.com/mcp?api_key=•••");
+    expect(JSON.stringify(findings[0])).not.toContain("tok1234567890");
+  });
+  it("flags token and access_token params, passes benign queries", async () => {
+    expect(
+      (await run(
+        "url-query-credentials",
+        remote({ url: "https://example.com/mcp?token=abc123" })
+      )) as any[]
+    ).toHaveLength(1);
+    expect(
+      (await run(
+        "url-query-credentials",
+        remote({ url: "https://example.com/mcp?q=hello&page=2" })
+      )) as any[]
+    ).toHaveLength(0);
+    expect((await run("url-query-credentials", stdio())) as any[]).toHaveLength(0);
+  });
+  it("suppresses the misleading no-auth finding for query-token URLs", async () => {
+    expect(
+      (await run(
+        "no-auth",
+        remote({ url: "https://example.com/mcp?api_key=tok1234567890" })
+      )) as any[]
+    ).toHaveLength(0);
+  });
+  it("never leaks the query credential anywhere in a full offline scan", async () => {
+    const token = "sk-ant-" + "A".repeat(32);
+    const report = await runChecks(
+      [remote({ url: `http://example.com/mcp?api_key=${token}` })],
+      { offline: true }
+    );
+    expect(report.findings.map((f) => f.checkId)).toContain("url-query-credentials");
+    expect(report.findings.map((f) => f.checkId)).toContain("plaintext-http");
+    expect(JSON.stringify(report)).not.toContain(token);
+  });
 });
 
 describe("url-credentials", () => {
@@ -205,6 +279,41 @@ describe("hardcoded-secret", () => {
       stdio({ env: { MY_SECRET: "aB3dE5fG7hJ9kL1mN3pQ5rS7t" } })
     )) as any[];
     expect(findings).toHaveLength(1);
+  });
+  it("flags a GitHub token passed as a stdio argument", async () => {
+    const secret = "ghp_" + "f".repeat(36);
+    const findings = (await run(
+      "hardcoded-secret",
+      stdio({ args: ["server.js", "--api-key", secret] })
+    )) as any[];
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("high");
+    expect(findings[0].evidence).toBe("args[2] = ghp_…••••••••");
+    expect(JSON.stringify(findings[0])).not.toContain(secret);
+  });
+  it("flags a long value handed to a sensitive flag, and inline --flag=value secrets", async () => {
+    const opaque = "aB3dE5fG7hJ9kL1mN3pQ5rS7t";
+    const byFlag = (await run(
+      "hardcoded-secret",
+      stdio({ args: ["server.js", "--api-key", opaque] })
+    )) as any[];
+    expect(byFlag).toHaveLength(1);
+    expect(byFlag[0].evidence).toBe("args[2] = aB3d…••••••••");
+    const inline = (await run(
+      "hardcoded-secret",
+      stdio({ args: ["server.js", "--token=xoxb-" + "1".repeat(12)] })
+    )) as any[];
+    expect(inline).toHaveLength(1);
+    expect(JSON.stringify(inline[0])).not.toContain("xoxb-111111111111");
+  });
+  it("ignores benign args, flags, and placeholders", async () => {
+    const findings = (await run(
+      "hardcoded-secret",
+      stdio({
+        args: ["server.js", "--verbose", "--port", "3000", "--token", "${MY_TOKEN}"],
+      })
+    )) as any[];
+    expect(findings).toHaveLength(0);
   });
 });
 

@@ -329,6 +329,7 @@ describe("fieldPathForFinding", () => {
       "command"
     );
     expect(fieldPathForFinding(finding("args: curl x | sh"))).toBe("args");
+    expect(fieldPathForFinding(finding("args[2] = ghp_••••"))).toBe("args");
     expect(fieldPathForFinding(finding("package: pkg@1.0.0 (3d old)"))).toBe(
       "args"
     );
