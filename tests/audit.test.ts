@@ -30,6 +30,47 @@ describe("redactArgsForLog", () => {
     expect(out.nested).toEqual({ password: "[redacted]" });
   });
 
+  it("redacts credentialed URLs inside string values", () => {
+    const out = redactArgsForLog(
+      { url: "https://admin:s3cret@internal/mcp", other: "https://example.com/x" },
+      []
+    );
+    expect(out.url).toBe("https://•••@internal/mcp");
+    expect(out.other).toBe("https://example.com/x");
+    expect(JSON.stringify(out)).not.toContain("s3cret");
+  });
+
+  it("redacts credential query params inside string values", () => {
+    // Short trailing token: does not trip the whole-value secret
+    // heuristic, so the surgical query-param redaction is what fires.
+    const out = redactArgsForLog(
+      { url: "https://example.com/mcp?mode=fast&api_key=abc123" },
+      []
+    );
+    expect(out.url).toBe("https://example.com/mcp?mode=fast&api_key=•••");
+    expect(JSON.stringify(out)).not.toContain("abc123");
+  });
+
+  it("redacts the whole value when a query token is long", () => {
+    // The whole-value secret heuristic fires first for long tokens, so
+    // the URL is redacted wholesale rather than surgically — still no
+    // credential in the output, just less context.
+    const out = redactArgsForLog(
+      { url: "https://example.com/mcp?api_key=sk-ant-abc123456" },
+      []
+    );
+    expect(out.url).toBe("[redacted]");
+    expect(JSON.stringify(out)).not.toContain("sk-ant-abc123456");
+  });
+
+  it("redacts credentialed URLs nested in objects", () => {
+    const out = redactArgsForLog(
+      { opts: { endpoint: "https://user:token123@host/i" } },
+      []
+    );
+    expect(out.opts).toEqual({ endpoint: "https://•••@host/i" });
+  });
+
   it("leaves ordinary values alone", () => {
     const args = { path: "/safe/notes.txt", limit: 10, flag: true };
     expect(redactArgsForLog(args, [])).toEqual(args);

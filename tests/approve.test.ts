@@ -3,6 +3,7 @@ import {
   createApprover,
   parseApprovalAnswer,
 } from "../src/gateway/approve.js";
+import { redactArgsForLog } from "../src/gateway/audit.js";
 
 describe("parseApprovalAnswer", () => {
   it("accepts y/yes/once, a/always, n/no, x/never (case-insensitive, trimmed)", () => {
@@ -103,5 +104,28 @@ describe("createApprover", () => {
     expect(seen).toContain("/safe/a.txt");
     expect(seen).toContain("45s");
     expect(seen).toContain("default deny");
+  });
+
+  it("never shows a credentialed URL in the prompt", async () => {
+    // Mirrors the proxy flow: raw args go through the audit redactor
+    // before reaching the approver, so the operator's terminal must
+    // never see the credential.
+    // Short token: does not trip the whole-value secret heuristic, so the
+    // surgical URL redaction is what the prompt shows.
+    const shown = redactArgsForLog(
+      { url: "https://admin:s3cret@internal/mcp?api_key=abc123" },
+      []
+    );
+    let seen = "";
+    const approver = createApprover({
+      prompt: async (text) => {
+        seen = text;
+        return "n";
+      },
+    });
+    await approver.ask("files", "fetch", shown);
+    expect(seen).not.toContain("s3cret");
+    expect(seen).not.toContain("abc123");
+    expect(seen).toContain("https://•••@internal/mcp?api_key=•••");
   });
 });
