@@ -11,11 +11,17 @@ import type { GatewayPolicy, PolicyAction } from "./gateway/policy.js";
  * `mcpguard learn --audit ./mcpguard-audit.jsonl` to emit a policy that
  * encodes what was observed:
  *
- *   - a tool allowed at least once (by the operator or the old policy)
- *     becomes an explicit "allow";
- *   - a tool only ever denied becomes an explicit "deny";
+ *   - a tool whose most recent decision was "allow" (by the operator
+ *     or the old policy) becomes an explicit "allow";
+ *   - a tool whose most recent decision was "deny" becomes an explicit "deny";
  *   - tools never observed are omitted — the root defaultAction: deny
  *     still covers them.
+ *
+ * A tool's most recent genuine decision wins: an approval the operator
+ * later reversed (allow, then deny) learns "deny", and a denial later
+ * reversed learns "allow". Denials caused by a tripped session budget
+ * are not judgments about the tool, so they are ignored — only
+ * policy/operator decisions teach the policy.
  *
  * The emitted policy is always deny-by-default. Review it before deploying;
  * learning reflects what happened, not what should happen.
@@ -33,9 +39,17 @@ export interface LearnOptions {
   server?: string;
 }
 
-interface ToolTally {
-  allow: number;
-  deny: number;
+/**
+ * True when the denial was caused by a tripped session budget rather
+ * than a judgment about the tool. Budget denials say nothing about
+ * whether the tool is safe, so learning must ignore them.
+ */
+function isBudgetDenial(rec: AuditRecord): boolean {
+  return (
+    rec.decision === "deny" &&
+    typeof rec.reason === "string" &&
+    (rec.reason.includes("budget exceeded") || rec.reason.includes("circuit tripped"))
+  );
 }
 
 function isAuditRecord(value: unknown): value is AuditRecord {
@@ -57,7 +71,10 @@ export function learnPolicy(auditPath: string, opts: LearnOptions = {}): Gateway
     throw new LearnError(`cannot read audit log: ${auditPath}`);
   }
 
-  const tallies = new Map<string, Map<string, ToolTally>>();
+  // Latest genuine decision per tool, keyed server -> tool -> decision.
+  // The audit log is chronological, so the last record seen for a tool
+  // is the operator's (or old policy's) final word on it.
+  const latest = new Map<string, Map<string, "allow" | "deny">>();
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -69,31 +86,25 @@ export function learnPolicy(auditPath: string, opts: LearnOptions = {}): Gateway
     }
     if (!isAuditRecord(rec)) continue;
     if (opts.server && rec.server !== opts.server) continue;
-    let tools = tallies.get(rec.server);
+    if (isBudgetDenial(rec)) continue;
+    let tools = latest.get(rec.server);
     if (!tools) {
       tools = new Map();
-      tallies.set(rec.server, tools);
+      latest.set(rec.server, tools);
     }
-    let tally = tools.get(rec.tool);
-    if (!tally) {
-      tally = { allow: 0, deny: 0 };
-      tools.set(rec.tool, tally);
-    }
-    if (rec.decision === "allow") tally.allow += 1;
-    else tally.deny += 1;
+    tools.set(rec.tool, rec.decision);
   }
 
-  if (tallies.size === 0) {
+  if (latest.size === 0) {
     throw new LearnError(`no usable audit records in ${auditPath}`);
   }
 
   const servers: GatewayPolicy["servers"] = {};
-  for (const server of [...tallies.keys()].sort()) {
-    const tools = tallies.get(server)!;
+  for (const server of [...latest.keys()].sort()) {
+    const tools = latest.get(server)!;
     const entries: Record<string, PolicyAction> = {};
     for (const tool of [...tools.keys()].sort()) {
-      const tally = tools.get(tool)!;
-      entries[tool] = tally.allow > 0 ? "allow" : "deny";
+      entries[tool] = tools.get(tool)!;
     }
     servers[server] = { tools: entries };
   }
