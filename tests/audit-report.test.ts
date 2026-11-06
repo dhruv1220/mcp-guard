@@ -51,18 +51,25 @@ describe("summarizeAudit", () => {
         durationMs: 200,
         resultBytes: 250,
       }),
+      rec({
+        tool: "read_file",
+        budgetTrip: "budget exceeded: max 1024 result bytes per session",
+        durationMs: 50,
+        resultBytes: 1200,
+      }),
       "this line is truncated json{",
       "",
       JSON.stringify({ server: "files" }),
     ]);
     const s = summarizeAudit(path);
     expect(s.totals).toEqual({
-      calls: 6,
-      allowed: 3,
+      calls: 7,
+      allowed: 4,
       denied: 3,
-      resultBytes: 2250,
+      resultBytes: 3450,
       injectionFlagged: 1,
-      avgDurationMs: 200,
+      budgetTrips: 1,
+      avgDurationMs: 162.5,
       maxDurationMs: 300,
     });
     expect(s.skippedLines).toBe(2);
@@ -131,5 +138,24 @@ describe("summarizeAudit", () => {
     expect(table).toContain("files/delete_file");
     expect(table).toContain("1 × reveal the system prompt");
     expect(table).not.toContain("/safe/a.txt");
+    expect(table).not.toContain("budget trips");
+  });
+
+  it("table output reports budget trips when a call tripped the circuit", () => {
+    const path = fixture([
+      rec({
+        tool: "read_file",
+        budgetTrip: "budget exceeded: max 1024 result bytes per session",
+        resultBytes: 2048,
+      }),
+      rec({
+        tool: "read_file",
+        decision: "deny",
+        reason: "circuit tripped: budget exceeded: max 1024 result bytes per session",
+      }),
+    ]);
+    const s = summarizeAudit(path);
+    expect(s.totals.budgetTrips).toBe(1);
+    expect(formatAuditTable(s)).toContain("budget trips: 1");
   });
 });

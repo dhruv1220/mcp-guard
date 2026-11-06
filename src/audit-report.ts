@@ -54,6 +54,8 @@ export interface AuditSummary {
     resultBytes: number;
     /** Allowed calls whose result tripped the injection screen. */
     injectionFlagged: number;
+    /** Allowed calls whose result tripped a session budget. */
+    budgetTrips: number;
     /** Mean durationMs over allowed calls that reported one, else null. */
     avgDurationMs: number | null;
     /** Max durationMs over allowed calls that reported one, else null. */
@@ -116,6 +118,7 @@ export function summarizeAudit(auditPath: string, opts: AuditOptions = {}): Audi
   let denied = 0;
   let resultBytes = 0;
   let injectionFlagged = 0;
+  let budgetTrips = 0;
   let durationSum = 0;
   let durationCount = 0;
   let maxDurationMs: number | null = null;
@@ -168,6 +171,9 @@ export function summarizeAudit(auditPath: string, opts: AuditOptions = {}): Audi
           injectionFlags.set(flag, (injectionFlags.get(flag) ?? 0) + 1);
         }
       }
+      if (typeof rec.budgetTrip === "string" && rec.budgetTrip.length > 0) {
+        budgetTrips += 1;
+      }
     } else {
       denied += 1;
       tally.denied += 1;
@@ -219,6 +225,7 @@ export function summarizeAudit(auditPath: string, opts: AuditOptions = {}): Audi
       denied,
       resultBytes,
       injectionFlagged,
+      budgetTrips,
       avgDurationMs:
         durationCount > 0 ? Math.round((durationSum / durationCount) * 10) / 10 : null,
       maxDurationMs,
@@ -252,6 +259,7 @@ export function formatAuditTable(summary: AuditSummary): string {
   }
   lines.push(
     `Result bytes: ${t.resultBytes} · injection-flagged calls: ${t.injectionFlagged}` +
+      (t.budgetTrips > 0 ? ` · budget trips: ${t.budgetTrips}` : "") +
       (t.avgDurationMs !== null
         ? ` · avg duration: ${t.avgDurationMs}ms (max ${t.maxDurationMs}ms)`
         : "")
