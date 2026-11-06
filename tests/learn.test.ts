@@ -10,13 +10,13 @@ function writeAudit(dir: string, lines: string[]): string {
   return path;
 }
 
-const rec = (server: string, tool: string, decision: "allow" | "deny") =>
+const rec = (server: string, tool: string, decision: "allow" | "deny", reason = "test") =>
   JSON.stringify({
     ts: "2026-09-26T09:00:00.000Z",
     server,
     tool,
     decision,
-    reason: "test",
+    reason,
   });
 
 describe("learnPolicy", () => {
@@ -37,13 +37,45 @@ describe("learnPolicy", () => {
     });
   });
 
-  it("allows a tool approved at least once, even with later denials", () => {
+  it("lets the latest decision win: deny then allow learns allow", () => {
     const dir = mkdtempSync(join(tmpdir(), "mcpguard-learn-"));
     const path = writeAudit(dir, [
       rec("files", "read_file", "deny"),
       rec("files", "read_file", "allow"),
     ]);
     expect(learnPolicy(path).servers?.["files"]?.tools?.["read_file"]).toBe("allow");
+  });
+
+  it("lets the latest decision win: allow then deny learns deny", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-learn-"));
+    const path = writeAudit(dir, [
+      rec("files", "exec", "allow"),
+      rec("files", "exec", "allow"),
+      rec("files", "exec", "deny"),
+    ]);
+    expect(learnPolicy(path).servers?.["files"]?.tools?.["exec"]).toBe("deny");
+  });
+
+  it("ignores denials caused by a tripped budget", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-learn-"));
+    const path = writeAudit(dir, [
+      rec("files", "read_file", "allow"),
+      rec(
+        "files",
+        "read_file",
+        "deny",
+        "circuit tripped: budget exceeded: max 2 tool calls per session"
+      ),
+    ]);
+    expect(learnPolicy(path).servers?.["files"]?.tools?.["read_file"]).toBe("allow");
+  });
+
+  it("throws when the log holds only budget denials", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mcpguard-learn-"));
+    const path = writeAudit(dir, [
+      rec("files", "read_file", "deny", "circuit tripped: budget exceeded: max 2 tool calls"),
+    ]);
+    expect(() => learnPolicy(path)).toThrow(LearnError);
   });
 
   it("filters by server and keeps each server separate", () => {
