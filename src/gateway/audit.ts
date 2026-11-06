@@ -1,4 +1,5 @@
 import { appendFileSync } from "node:fs";
+import { redactUrlsInText } from "../scanner/checks.js";
 
 /**
  * Append-only JSONL audit log for the gateway.
@@ -56,6 +57,13 @@ export function redactArgsForLog(
       out[k] = "[redacted]";
     } else if (typeof v === "string" && looksSecret(v)) {
       out[k] = "[redacted]";
+    } else if (typeof v === "string") {
+      // A plain string can still carry credentials inside a URL
+      // (userinfo or a sensitive query param). Redact those in place;
+      // clean URLs and plain text pass through byte-identical. This is
+      // the same redactor the approval prompt displays, so the operator
+      // never sees a credential on the terminal either.
+      out[k] = redactUrlsInText(v);
     } else if (v !== null && typeof v === "object") {
       try {
         out[k] = redactArgsForLog(v as Record<string, unknown>, redactKeys);
