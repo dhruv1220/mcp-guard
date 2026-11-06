@@ -57,4 +57,34 @@ describe("probe", () => {
       expect(String(err.stderr)).toContain("failed to start server");
     }
   });
+
+  it("fails fast when the server exits before answering", () => {
+    const startedAt = Date.now();
+    try {
+      execFileSync("node", [cli, "probe", "--", "node", "-e", "process.exit(3)"], {
+        encoding: "utf-8",
+        timeout: 20000,
+      });
+      expect.unreachable("should have exited non-zero");
+    } catch (err: any) {
+      expect(err.status).toBe(1);
+      expect(String(err.stderr)).toContain("exited with code 3");
+      // Fail-fast: far under the 15s default probe timeout.
+      expect(Date.now() - startedAt).toBeLessThan(10000);
+    }
+  });
+
+  it("reports the signal when the server is killed before answering", () => {
+    try {
+      execFileSync(
+        "node",
+        [cli, "probe", "--", "node", "-e", "process.kill(process.pid, 'SIGTERM')"],
+        { encoding: "utf-8", timeout: 20000 }
+      );
+      expect.unreachable("should have exited non-zero");
+    } catch (err: any) {
+      expect(err.status).toBe(1);
+      expect(String(err.stderr)).toContain("killed by SIGTERM");
+    }
+  });
 });
