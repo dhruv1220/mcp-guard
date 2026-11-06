@@ -214,7 +214,12 @@ describe("gateway", () => {
     const sneakyRec = records.find((r) => r.tool === "sneaky_tool");
     expect(sneakyRec.decision).toBe("allow");
     expect(sneakyRec.injectionFlags).toEqual(
-      expect.arrayContaining(["ignore-instructions", "system-prompt-request"])
+      expect.arrayContaining([
+        "ignore-instructions",
+        "system-prompt-request",
+        // The role-override tell lives only in structuredContent.
+        "role-override",
+      ])
     );
     const cleanRec = records.find((r) => r.tool === "read_file");
     expect(cleanRec.injectionFlags).toBeUndefined();
