@@ -66,7 +66,9 @@ mcpguard gateway --policy ./policy.json --server filesystem -- npx -y @modelcont
 Rules: a tool entry is `"allow" | "deny" | "approval"` or `{ action, args, redactArgs }`.
 `args` constrains each named argument (`pattern`, `enum`, `maxLength`, `required`).
 Deny always wins; unknown tools fall back to the server's `defaultAction`, then the
-root `defaultAction`. `"approval"` denies in non-interactive use. Secret-looking
+root `defaultAction`. `"approval"` denies in non-interactive use. Argument
+constraints apply to approval-gated tools too: a call whose args violate the
+rule is denied outright and never reaches the operator. Secret-looking
 argument values are redacted in the audit log automatically.
 
 ### Session budgets
