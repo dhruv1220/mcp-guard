@@ -69,6 +69,18 @@ export async function probeServer(opts: ProbeOptions): Promise<ProbeResult> {
 
     child.on("error", (err) => fail(`failed to start server: ${err.message}`));
 
+    // A server that exits before answering (crash, bad config, wrong
+    // binary) must fail fast with its exit status — not hang until the
+    // probe timeout and report a generic timeout. After the probe
+    // settles, `done` guards this into a no-op (we kill the child then).
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        fail(`server exited: killed by ${signal} before probe completed`);
+      } else {
+        fail(`server exited with code ${code ?? "unknown"} before probe completed`);
+      }
+    });
+
     const request = (
       method: string,
       params: unknown,
