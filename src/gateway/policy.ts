@@ -211,6 +211,16 @@ export function decide(
       redactArgs: rule?.redactArgs ?? [],
     };
   }
+  // Argument constraints apply to approval-gated tools too: a call that
+  // violates its own rule's constraints is denied outright and never
+  // reaches the operator — approval authorizes the call, it does not
+  // waive the policy's constraints on it.
+  const argMap =
+    typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+  const checked = rule ? checkArgs(rule, argMap) : { ok: true as const };
+  if (!checked.ok) {
+    return { action: "deny", reason: checked.reason, redactArgs: rule?.redactArgs ?? [] };
+  }
   if (action === "approval") {
     return {
       action: "deny",
@@ -218,12 +228,6 @@ export function decide(
       redactArgs: rule?.redactArgs ?? [],
       approvalRequired: true,
     };
-  }
-  const argMap =
-    typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
-  const checked = rule ? checkArgs(rule, argMap) : { ok: true as const };
-  if (!checked.ok) {
-    return { action: "deny", reason: checked.reason, redactArgs: rule?.redactArgs ?? [] };
   }
   return { action: "allow", reason: "allowed by policy", redactArgs: rule?.redactArgs ?? [] };
 }

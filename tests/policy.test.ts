@@ -91,6 +91,61 @@ describe("decide", () => {
     const d = decide(base, "files", "exec", { command: "ls" });
     expect(d.action).toBe("deny");
     expect(d.reason).toContain("approval");
+    expect(d.approvalRequired).toBe(true);
+  });
+
+  it("still requires approval when an approval-gated tool's args conform", () => {
+    const policy: GatewayPolicy = {
+      version: 1,
+      defaultAction: "deny",
+      servers: {
+        s: {
+          tools: {
+            run: { action: "approval", args: { path: { pattern: "^/safe/" } } },
+          },
+        },
+      },
+    };
+    const d = decide(policy, "s", "run", { path: "/safe/job.sh" });
+    expect(d.action).toBe("deny");
+    expect(d.approvalRequired).toBe(true);
+    expect(d.reason).toContain("approval");
+  });
+
+  it("denies without prompting when an approval-gated tool's args violate constraints", () => {
+    const policy: GatewayPolicy = {
+      version: 1,
+      defaultAction: "deny",
+      servers: {
+        s: {
+          tools: {
+            run: { action: "approval", args: { path: { pattern: "^/safe/" } } },
+          },
+        },
+      },
+    };
+    const d = decide(policy, "s", "run", { path: "/etc/passwd" });
+    expect(d.action).toBe("deny");
+    expect(d.approvalRequired).toBeUndefined();
+    expect(d.reason).toContain("pattern");
+  });
+
+  it("denies without prompting when an approval-gated tool misses a required arg", () => {
+    const policy: GatewayPolicy = {
+      version: 1,
+      defaultAction: "deny",
+      servers: {
+        s: {
+          tools: {
+            run: { action: "approval", args: { q: { required: true } } },
+          },
+        },
+      },
+    };
+    const d = decide(policy, "s", "run", {});
+    expect(d.action).toBe("deny");
+    expect(d.approvalRequired).toBeUndefined();
+    expect(d.reason).toContain("required");
   });
 
   it("denies when an argument violates its pattern", () => {
