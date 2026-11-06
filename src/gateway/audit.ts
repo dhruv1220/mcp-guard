@@ -22,6 +22,8 @@ export interface AuditRecord {
   resultBytes?: number;
   /** Injection patterns flagged in the tool result (screening is flag-only). */
   injectionFlags?: string[];
+  /** Budget trip notice when this call's result tripped the circuit. */
+  budgetTrip?: string;
 }
 
 const SECRET_VALUE = new RegExp(

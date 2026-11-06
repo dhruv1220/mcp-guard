@@ -248,7 +248,10 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
         if (call) {
           pending.delete(id as JsonRpcId);
           const resultBytes = Buffer.byteLength(line, "utf8");
-          budgets?.recordResult(resultBytes);
+          // A trip here is the only trace of WHICH call opened the
+          // circuit; record it on this call's audit record instead of
+          // leaving the next call's denial as the only evidence.
+          const budgetTrip = budgets?.recordResult(resultBytes) ?? null;
           let injectionFlags: string[] | undefined;
           if (screenOutput) {
             const flags = new Set<string>();
@@ -266,6 +269,7 @@ export async function runProxy(opts: ProxyOptions): Promise<number> {
             durationMs: Date.now() - call.startedAt,
             resultBytes,
             injectionFlags,
+            ...(budgetTrip ? { budgetTrip } : {}),
           });
         }
       }
